@@ -16,23 +16,25 @@ export default class ObsidianAgentPlugin extends Plugin {
 			(leaf) => new ChatView(leaf, this)
 		);
 
-		initAI(this.app, this, async () => {
-			this.addSettingTab(new AgentSettingTab(this.app, this));
-			
-			// Register AI commands
-			registerEditorCommands(this);
+		// Register AI commands immediately so they show up in the UI
+		registerEditorCommands(this);
 
-			this.addRibbonIcon('bot', 'Open Agent Chat', () => {
+		this.addRibbonIcon('bot', 'Open Agent Chat', () => {
+			this.activateChatView();
+		});
+
+		this.addCommand({
+			id: 'open-agent-chat',
+			name: 'Open Agent Chat',
+			callback: () => {
 				this.activateChatView();
-			});
+			}
+		});
 
-			this.addCommand({
-				id: 'open-agent-chat',
-				name: 'Open Agent Chat',
-				callback: () => {
-					this.activateChatView();
-				}
-			});
+		initAI(this.app, this, async () => {
+			// This callback fires when AI Providers is loaded and ready
+			this.addSettingTab(new AgentSettingTab(this.app, this));
+			new Notice("Obsidian LMStudio Agent connected to AI Providers.");
 		});
 	}
 
