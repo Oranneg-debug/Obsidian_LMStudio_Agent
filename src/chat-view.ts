@@ -23,6 +23,17 @@ export class ChatView extends ItemView {
 		return 'Agent Chat';
 	}
 
+	getProviderAndModel(aiProviders: any, settingValue: string) {
+		if (!settingValue) return { provider: aiProviders.providers[0], model: undefined };
+		
+		const parts = settingValue.split("::");
+		const providerId = parts[0];
+		const model = parts[1];
+
+		const provider = aiProviders.providers.find((p: any) => p.id === providerId);
+		return { provider: provider || aiProviders.providers[0], model: model === 'default' ? undefined : model };
+	}
+
 	async onOpen() {
 		const container = this.containerEl.children[1] as HTMLElement;
 		if (!container) return;
@@ -99,8 +110,9 @@ export class ChatView extends ItemView {
 				this.addMessageToUI('assistant', 'Error: No AI provider configured in obsidian-ai-providers settings.');
 				return;
 			}
-			const provider = aiProviders.providers[0];
-			if (!provider) return;
+			
+			const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, this.plugin.settings.chatModel);
+			if (!chatProvider) return;
 
 			// Define tools for the agent
 			const tools: IAIToolDefinition[] = [
@@ -147,6 +159,20 @@ export class ChatView extends ItemView {
 							required: ["path", "canvasJson"]
 						}
 					}
+				},
+				{
+					type: "function",
+					function: {
+						name: "search_vault",
+						description: "Performs a semantic search over the user's vault to find relevant context. Use this whenever the user asks about notes or vault contents.",
+						parameters: {
+							type: "object",
+							properties: {
+								query: { type: "string", description: "The search query to look for in the vault." }
+							},
+							required: ["query"]
+						}
+					}
 				}
 			];
 
@@ -161,7 +187,8 @@ export class ChatView extends ItemView {
 
 			while (!isToolCallComplete) {
 				const assistantMessage = await aiProviders.toolsExecute({
-					provider,
+					provider: chatProvider,
+					model: chatModel,
 					messages: currentHistory,
 					tools: tools,
 					tool_choice: "auto"
@@ -191,6 +218,40 @@ export class ChatView extends ItemView {
 								const content = toolCall.function.name === 'create_canvas' ? args.canvasJson : args.content;
 								const file = await this.plugin.app.vault.create(args.path, content);
 								toolResult = `Successfully created file at ${file.path}`;
+							} else if (toolCall.function.name === 'search_vault') {
+								const { provider: embedProvider, model: embedModel } = this.getProviderAndModel(aiProviders, this.plugin.settings.embeddingModel);
+								
+								// Read documents based on ragFolders
+								const ragFolders = this.plugin.settings.ragFolders.split(',').map((f: string) => f.trim()).filter((f: string) => f);
+								const markdownFiles = this.plugin.app.vault.getMarkdownFiles();
+								
+								const filteredFiles = ragFolders.includes('/') || ragFolders.length === 0 
+									? markdownFiles 
+									: markdownFiles.filter((f: TFile) => ragFolders.some((folder: string) => f.path.startsWith(folder)));
+								
+								const documents = [];
+								for (const file of filteredFiles) {
+									try {
+										const content = await this.plugin.app.vault.cachedRead(file);
+										if (content.trim()) {
+											documents.push({
+												content: content,
+												meta: { filename: file.name, path: file.path }
+											});
+										}
+									} catch (e) {
+										// Ignore read errors
+									}
+								}
+
+								const results = await aiProviders.retrieve({
+									query: args.query,
+									documents: documents,
+									embeddingProvider: embedProvider
+								});
+								
+								toolResult = results.slice(0, 5).map((r: any) => `File: ${r.document.meta?.path}\nRelevance: ${r.score}\nContent: ${r.content}`).join("\n\n---\n\n");
+								if (!toolResult) toolResult = "No relevant results found.";
 							} else {
 								toolResult = `Error: Unknown tool ${toolCall.function.name}`;
 							}

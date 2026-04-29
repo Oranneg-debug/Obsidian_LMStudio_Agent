@@ -2,6 +2,17 @@ import { Editor, MarkdownView, Notice } from 'obsidian';
 import ObsidianAgentPlugin from './main';
 import { waitForAI } from '@obsidian-ai-providers/sdk';
 
+export function getProviderAndModel(aiProviders: any, settingValue: string) {
+	if (!settingValue) return { provider: aiProviders.providers[0], model: undefined };
+	
+	const parts = settingValue.split("::");
+	const providerId = parts[0];
+	const model = parts[1];
+
+	const provider = aiProviders.providers.find((p: any) => p.id === providerId);
+	return { provider: provider || aiProviders.providers[0], model: model === 'default' ? undefined : model };
+}
+
 export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 	plugin.addCommand({
 		id: 'agent-rewrite-selection',
@@ -21,13 +32,14 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 					new Notice('No AI provider configured. Please configure obsidian-ai-providers plugin.');
 					return;
 				}
-				const provider = aiProviders.providers[0];
-				if (!provider) return;
+				const { provider: editProvider, model: editModel } = getProviderAndModel(aiProviders, plugin.settings.editModel);
+				if (!editProvider) return;
 
 				new Notice('Rewriting text...');
 
 				const result = await aiProviders.execute({
-					provider,
+					provider: editProvider,
+					model: editModel,
 					messages: [
 						{ role: "system", content: plugin.settings.editorRewritePrompt },
 						{ role: "user", content: selection }
@@ -61,13 +73,14 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 					new Notice('No AI provider configured. Please configure obsidian-ai-providers plugin.');
 					return;
 				}
-				const provider = aiProviders.providers[0];
-				if (!provider) return;
+				const { provider: editProvider, model: editModel } = getProviderAndModel(aiProviders, plugin.settings.editModel);
+				if (!editProvider) return;
 
 				new Notice('Autocompleting...');
 
 				const result = await aiProviders.execute({
-					provider,
+					provider: editProvider,
+					model: editModel,
 					messages: [
 						{ role: "system", content: plugin.settings.editorAutocompletePrompt },
 						{ role: "user", content: `Here is the document context before the cursor:\n\n${textBeforeCursor}\n\nContinue the text from exactly where it leaves off.` }
