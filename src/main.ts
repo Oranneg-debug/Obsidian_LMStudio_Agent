@@ -1,4 +1,4 @@
-import { Plugin } from 'obsidian';
+import { Plugin, Notice } from 'obsidian';
 import { DEFAULT_SETTINGS, AgentPluginSettings, AgentSettingTab } from "./settings";
 import { initAI, waitForAI } from '@obsidian-ai-providers/sdk';
 import { registerEditorCommands } from './editor-commands';
