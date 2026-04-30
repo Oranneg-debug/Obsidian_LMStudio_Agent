@@ -1,16 +1,53 @@
 import { Editor, MarkdownView, Notice } from 'obsidian';
 import ObsidianAgentPlugin from './main';
-import { waitForAI } from '@obsidian-ai-providers/sdk';
+import { waitForAI, IAIProvidersService, IAIProvider } from '@obsidian-ai-providers/sdk';
 
-export function getProviderAndModel(aiProviders: any, settingValue: string) {
+export function getProviderAndModel(aiProviders: IAIProvidersService, settingValue: string): { provider?: IAIProvider, model?: string } {
 	if (!settingValue) return { provider: aiProviders.providers[0], model: undefined };
 	
 	const parts = settingValue.split("::");
 	const providerId = parts[0];
 	const model = parts[1];
 
-	const provider = aiProviders.providers.find((p: any) => p.id === providerId);
+	const provider = aiProviders.providers.find(p => p.id === providerId);
 	return { provider: provider || aiProviders.providers[0], model: model === 'default' ? undefined : model };
+}
+
+export async function executeEditorCommand(
+	plugin: ObsidianAgentPlugin, 
+	editor: Editor, 
+	systemPrompt: string, 
+	userPrompt: string, 
+	noticeMessage: string
+): Promise<string | null> {
+	try {
+		const aiResolver = await waitForAI();
+		const aiProviders = await aiResolver.promise;
+
+		if (!aiProviders.providers || aiProviders.providers.length === 0) {
+			new Notice('No AI provider configured.');
+			return null;
+		}
+		const { provider: editProvider, model: editModel } = getProviderAndModel(aiProviders, plugin.settings.editModel);
+		if (!editProvider) return null;
+
+		new Notice(noticeMessage);
+
+		const result = await aiProviders.execute({
+			provider: editProvider,
+			model: editModel,
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: userPrompt }
+			],
+		});
+
+		return result;
+	} catch (error) {
+		console.error(error);
+		new Notice('Failed to execute command.');
+		return null;
+	}
 }
 
 export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
@@ -24,32 +61,16 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 				return;
 			}
 
-			try {
-				const aiResolver = await waitForAI();
-				const aiProviders = await aiResolver.promise;
+			const result = await executeEditorCommand(
+				plugin,
+				editor,
+				plugin.settings.editorRewritePrompt,
+				selection,
+				'Rewriting text...'
+			);
 
-				if (!aiProviders.providers || aiProviders.providers.length === 0) {
-					new Notice('No AI provider configured. Please configure obsidian-ai-providers plugin.');
-					return;
-				}
-				const { provider: editProvider, model: editModel } = getProviderAndModel(aiProviders, plugin.settings.editModel);
-				if (!editProvider) return;
-
-				new Notice('Rewriting text...');
-
-				const result = await aiProviders.execute({
-					provider: editProvider,
-					model: editModel,
-					messages: [
-						{ role: "system", content: plugin.settings.editorRewritePrompt },
-						{ role: "user", content: selection }
-					],
-				});
-
+			if (result) {
 				editor.replaceSelection(result);
-			} catch (error) {
-				console.error(error);
-				new Notice('Failed to rewrite text.');
 			}
 		}
 	});
@@ -59,39 +80,52 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 		name: 'Autocomplete at cursor',
 		editorCallback: async (editor: Editor, view: MarkdownView) => {
 			const cursor = editor.getCursor();
-			// Get the last 2000 characters to provide context without overloading the prompt
 			const textBeforeCursor = editor.getRange(
 				{ line: Math.max(0, cursor.line - 100), ch: 0 }, 
 				cursor
 			);
 			
-			try {
-				const aiResolver = await waitForAI();
-				const aiProviders = await aiResolver.promise;
+			const result = await executeEditorCommand(
+				plugin,
+				editor,
+				plugin.settings.editorAutocompletePrompt,
+				`Here is the document context before the cursor:\n\n${textBeforeCursor}\n\nContinue the text from exactly where it leaves off.`,
+				'Autocompleting...'
+			);
 
-				if (!aiProviders.providers || aiProviders.providers.length === 0) {
-					new Notice('No AI provider configured. Please configure obsidian-ai-providers plugin.');
-					return;
-				}
-				const { provider: editProvider, model: editModel } = getProviderAndModel(aiProviders, plugin.settings.editModel);
-				if (!editProvider) return;
-
-				new Notice('Autocompleting...');
-
-				const result = await aiProviders.execute({
-					provider: editProvider,
-					model: editModel,
-					messages: [
-						{ role: "system", content: plugin.settings.editorAutocompletePrompt },
-						{ role: "user", content: `Here is the document context before the cursor:\n\n${textBeforeCursor}\n\nContinue the text from exactly where it leaves off.` }
-					],
-				});
-
+			if (result) {
 				editor.replaceRange(result, cursor);
-			} catch (error) {
-				console.error(error);
-				new Notice('Failed to autocomplete.');
 			}
 		}
+	});
+}
+
+export function registerCustomCommands(plugin: ObsidianAgentPlugin) {
+	plugin.settings.customCommands.forEach(cmd => {
+		if (!cmd.name || !cmd.prompt) return;
+		
+		plugin.addCommand({
+			id: cmd.id,
+			name: cmd.name,
+			editorCallback: async (editor: Editor, view: MarkdownView) => {
+				const selection = editor.getSelection();
+				if (!selection) {
+					new Notice('Please select some text to process.');
+					return;
+				}
+
+				const result = await executeEditorCommand(
+					plugin,
+					editor,
+					cmd.prompt,
+					selection,
+					`Running ${cmd.name}...`
+				);
+
+				if (result) {
+					editor.replaceSelection(result);
+				}
+			}
+		});
 	});
 }

@@ -1,7 +1,7 @@
 import { Plugin, Notice } from 'obsidian';
 import { DEFAULT_SETTINGS, AgentPluginSettings, AgentSettingTab } from "./settings";
-import { initAI, waitForAI } from '@obsidian-ai-providers/sdk';
-import { registerEditorCommands } from './editor-commands';
+import { initAI } from '@obsidian-ai-providers/sdk';
+import { registerEditorCommands, registerCustomCommands } from './editor-commands';
 import { ChatView, CHAT_VIEW_TYPE } from './chat-view';
 import '@obsidian-ai-providers/sdk/styles.css';
 
@@ -18,24 +18,25 @@ export default class ObsidianAgentPlugin extends Plugin {
 
 		// Register AI commands immediately so they show up in the UI
 		registerEditorCommands(this);
+		registerCustomCommands(this);
 
-		this.addRibbonIcon('bot', 'Open Agent Chat', () => {
-			this.activateChatView();
+		this.addRibbonIcon('bot', 'Open agent chat', () => {
+			void this.activateChatView();
 		});
 
 		this.addCommand({
 			id: 'open-agent-chat',
-			name: 'Open Agent Chat',
+			name: 'Open agent chat',
 			callback: () => {
-				this.activateChatView();
+				void this.activateChatView();
 			}
 		});
 
 		initAI(this.app, this, async () => {
 			// This callback fires when AI Providers is loaded and ready
 			this.addSettingTab(new AgentSettingTab(this.app, this));
-			new Notice("Obsidian LMStudio Agent connected to AI Providers.");
-		});
+			new Notice("Agent connected to AI providers.");
+		}).catch(console.error);
 	}
 
 	async activateChatView() {
@@ -55,6 +56,7 @@ export default class ObsidianAgentPlugin extends Plugin {
 		}
 
 		if (leaf) {
+			// eslint-disable-next-line @typescript-eslint/no-floating-promises
 			workspace.revealLeaf(leaf);
 		}
 	}
@@ -63,7 +65,19 @@ export default class ObsidianAgentPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<AgentPluginSettings>);
+		const data = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data as Partial<AgentPluginSettings>);
+		
+		// Migrate old ragFolders string to array
+		if (typeof this.settings.ragFolders === 'string') {
+			this.settings.ragFolders = (this.settings.ragFolders as string).split(',').map(s => s.trim()).filter(s => s);
+		}
+		if (!Array.isArray(this.settings.excludeFolders)) {
+			this.settings.excludeFolders = [];
+		}
+		if (!Array.isArray(this.settings.customCommands)) {
+			this.settings.customCommands = [];
+		}
 	}
 
 	async saveSettings() {

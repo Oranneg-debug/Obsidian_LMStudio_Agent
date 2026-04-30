@@ -1,90 +1,53 @@
-# Obsidian Sample Plugin
+# Obsidian Agent (Powered by AI Providers)
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Obsidian Agent is an advanced, fully agentic AI assistant integrated directly into your Obsidian Vault. It goes beyond simple chat by acting as an intelligent partner that can browse the web, read your notes, organize your vault, and even create Canvas mind maps natively.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+By leveraging the `@obsidian-ai-providers/sdk`, this plugin allows you to seamlessly plug in local models (like LM Studio or Ollama) or cloud providers, giving you full control over your AI experience.
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+## ✨ Key Features
 
-## First time developing plugins?
+### 🧠 Intelligent Vault Context
+- **Active Context Ribbon**: Type `@` to instantly search and attach notes or `.canvas` files to the context ribbon.
+- **Inline Linking**: Type `[[` to trigger native Obsidian auto-complete, allowing you to easily link notes directly in your prompts. The AI's responses that contain paths are also automatically converted back into clickable wiki-links.
+- **Smart Related Notes**: When you open a note or chat with the agent, it extracts key semantic concepts and automatically surfaces up to 8 highly relevant related notes from your vault—**all without needing a heavy local embedding model!**
 
-Quick starting guide for new plugin devs:
+### 🌐 Free Web Browsing & Scraping
+Enable "Agentic Capabilities" in the settings to allow your AI to browse the internet safely and for free:
+- **`fetch_url`**: Feed the agent a link, and it will bypass CORS restrictions to scrape and read the raw text of the article directly.
+- **`web_search`**: Ask the agent a question about current events, and it will silently query DuckDuckGo, parse the HTML results, and summarize the top search results for you—**no API keys required.**
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### 🛠️ Agentic File Management
+Give your agent permission to actively manage your vault!
+- The agent is equipped with `edit_file`, `move_file`, and `delete_file` tools.
+- **Permission System**: Execution pauses whenever the agent attempts to modify a file. A UI prompt appears in the chat asking you to **Approve Once**, **Approve for Session**, or **Deny** the action.
+- **Safe Deletion**: Deletions are sent safely to your computer's System Trash, not permanently destroyed.
+- **Excluded Folders**: Define specific folders (like Templates) that the agent is strictly forbidden from modifying.
 
-## Releasing new releases
+### 🎨 Canvas Generation & Reading
+The agent can natively read and write Obsidian `.canvas` files.
+- Mention a canvas file, and the agent will parse the underlying JSON structure to understand the nodes and connections of your whiteboards.
+- Ask the agent to "map out a project timeline", and it will use the `create_canvas` tool to generate a perfectly formatted Obsidian Canvas and automatically open it in a new tab for you.
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### ⚡ Custom Workflows & Editor Commands
+- **Slash Commands**: Type `/` in the chat to instantly insert custom predefined system prompts and instructions.
+- **Text Selection Context Menu**: Highlight text in the chat, right-click, and choose to "Insert into active note" or "Create new note from selection".
+- **Editor Integration**: Highlight text in your editor and run the "Rewrite" or "Autocomplete" commands via the Obsidian command palette.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### 📎 Native Attachments
+- Drag and drop images or text files into the chat. Images are seamlessly encoded for vision models, and text files are read into the context.
+- Attachments are automatically saved physically into your vault's `media/` folder, ensuring they are preserved and natively accessible.
 
-## Adding your plugin to the community plugin list
+## ⚙️ Setup & Configuration
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+1. **Install AI Providers**: This plugin relies on the official [Obsidian AI Providers plugin](https://github.com/obsidian-ai-providers) to manage API connections. Ensure it is installed and configured with your preferred model (e.g. LM Studio for local inference).
+2. **Install Obsidian Agent**: Copy the plugin folder into your vault's `.obsidian/plugins/` directory.
+3. **Configure Settings**: Go to the plugin settings to choose your default Chat and Editor models, configure RAG/Semantic excluded folders, and enable Agentic Capabilities.
 
-## How to use
+## 🚀 Roadmap
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+- **ComfyUI Integration**: Upcoming tool allowing the agent to configure and trigger local ComfyUI image generation workflows and save the output directly to the vault.
+- **Krita Integration**: Expanding the workflow stack to interface with digital art pipelines.
 
-## Manually installing the plugin
+## 🛡️ Privacy & Security
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
-
-If you have multiple URLs, you can also do:
-
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
-
-## API Documentation
-
-See https://docs.obsidian.md
+This plugin is designed with local-first setups in mind. By pairing it with LM Studio or Ollama, your notes, web searches, and generated canvases never leave your machine. The permission system ensures the agent never takes destructive actions without your explicit, real-time approval.
