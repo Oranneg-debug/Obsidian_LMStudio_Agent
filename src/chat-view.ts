@@ -563,64 +563,31 @@ export class ChatView extends ItemView {
 
 		this.relatableNotesContainer.setCssStyles({ display: 'flex' });
 		this.relatableNotesContainer.empty();
-		this.relatableNotesContainer.createEl('div', { text: `Looking up context for ${file.name}...` }).setCssStyles({ color: 'var(--text-muted)', fontSize: '0.8em' });
+		this.relatableNotesContainer.createEl('div', { text: `Finding related notes for ${file.name}...` }).setCssStyles({ color: 'var(--text-muted)', fontSize: '0.8em' });
 
 		try {
 			const content = await this.plugin.app.vault.cachedRead(file);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const aiResolver = await waitForAI();
 			const aiProviders = await aiResolver.promise as any;
-			
-			const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, this.plugin.settings.chatModel);
-			if (!chatProvider) throw new Error("No chat provider configured");
 
-			const keywordPrompt = "Extract 3 to 5 highly specific keywords or short unique phrases from the provided text that represent its core topic. Respond ONLY with a valid JSON array of strings. E.g. [\"keyword1\", \"keyword2\"]";
+			// --- LOCAL keyword extraction (NO LLM call) ---
+			const stopWords = new Set(['the','a','an','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','must','can','could','and','but','or','nor','for','yet','so','in','on','at','to','from','by','with','about','into','through','during','before','after','above','below','between','under','over','out','up','down','off','then','than','too','very','just','that','this','these','those','it','its','they','them','their','we','our','us','you','your','he','she','his','her','not','no','all','each','every','both','few','more','most','other','some','such','only','same','also','how','what','which','who','when','where','why','if','of','as']);
+			const words = content.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+			const freq = new Map<string, number>();
+			for (const w of words) { freq.set(w, (freq.get(w) || 0) + 1); }
+			const extractedKeywords = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(e => e[0]);
 
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-			const keywordsResponse = await aiProviders.execute({
-				messages: [
-					{ role: 'system', content: keywordPrompt },
-					{ role: 'user', content: content.substring(0, 1500) }
-				],
-				provider: chatProvider,
-				model: chatModel,
-				abortController: new AbortController()
-			});
-
-			let keywordsResponseStr = "";
-			if (typeof keywordsResponse === 'string') {
-				keywordsResponseStr = keywordsResponse;
-			} else if (keywordsResponse && typeof keywordsResponse === 'object') {
-				if (Symbol.asyncIterator in keywordsResponse) {
-					for await (const chunk of keywordsResponse) {
-						keywordsResponseStr += chunk || "";
-					}
-				} else {
-					keywordsResponseStr = String(keywordsResponse);
-				}
-			}
-
-			let extractedKeywords: string[] = [];
-			if (keywordsResponseStr.trim()) {
-				try {
-					extractedKeywords = JSON.parse(keywordsResponseStr.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
-				} catch {
-					// Fallback to basic word splitting if LLM failed JSON format
-					extractedKeywords = keywordsResponseStr.replace(/[\[\]"']/g, '').split(',').map(s => s.trim()).filter(s => s.length > 2);
-				}
-			}
-
+			// Also add wikilink targets
 			const linkMatches = content.match(/\[\[(.*?)\]\]/g);
 			if (linkMatches) {
 				for (const match of linkMatches) {
 					const linkName = match.slice(2, -2).split('|')[0]?.trim();
-					if (linkName && !extractedKeywords.includes(linkName)) {
-						extractedKeywords.push(linkName);
+					if (linkName && !extractedKeywords.includes(linkName.toLowerCase())) {
+						extractedKeywords.push(linkName.toLowerCase());
 					}
 				}
 			}
-
-			console.log("Extracted Context Keywords:", extractedKeywords);
 
 			const searchFiles = this.plugin.app.vault.getFiles().filter(f => (f.extension === 'md' || f.extension === 'canvas') && f.path !== file.path);
 			
@@ -653,7 +620,7 @@ export class ChatView extends ItemView {
 							searchResults = results.map((r: any) => ({
 								path: r.meta?.path || '',
 								filename: r.meta?.name || '',
-								score: r.score || 0
+								score: Math.round((r.score || 0) * 100) / 100
 							}));
 						}
 					}
@@ -670,7 +637,7 @@ export class ChatView extends ItemView {
 						const docLower = docContent.toLowerCase();
 						let score = 0;
 						for (const kw of extractedKeywords) {
-							if (kw && docLower.includes(kw.toLowerCase())) score += 1;
+							if (kw && docLower.includes(kw)) score += 1;
 						}
 						if (score > 0) searchResults.push({ path: f.path, filename: f.name, score });
 					} catch { /* ignore */ }
@@ -701,8 +668,9 @@ export class ChatView extends ItemView {
 			top8.forEach((r) => {
 				const path = r.path;
 				if (!path) return;
-				const btn = notesList.createEl('button', { text: r.filename });
-				btn.title = `Matched Keywords: ${r.score}`;
+				const scoreLabel = r.score < 1 ? `${(r.score * 100).toFixed(0)}%` : `${r.score}`;
+				const btn = notesList.createEl('button', { text: `${r.filename} (${scoreLabel})` });
+				btn.title = `Relevance: ${scoreLabel}`;
 				btn.setCssStyles({ fontSize: '0.7em', padding: '2px 5px', height: 'auto' });
 				btn.addEventListener('click', () => {
 					this.inputEl.value += ` [[${path}]] `;
@@ -710,8 +678,12 @@ export class ChatView extends ItemView {
 				});
 			});
 
-			const promptsTitle = this.relatableNotesContainer.createDiv({ text: 'Suggested Prompts:' });
-			promptsTitle.setCssStyles({ fontWeight: 'bold', fontSize: '0.8em', marginBottom: '2px' });
+			// Suggested prompts section — manual generation via button
+			const promptsRow = this.relatableNotesContainer.createDiv();
+			promptsRow.setCssStyles({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' });
+			const promptsTitle = promptsRow.createDiv({ text: 'Suggested Prompts:' });
+			promptsTitle.setCssStyles({ fontWeight: 'bold', fontSize: '0.8em' });
+
 			const promptsList = this.relatableNotesContainer.createDiv();
 			promptsList.setCssStyles({ display: 'flex', flexDirection: 'column', gap: '5px' });
 
@@ -723,56 +695,65 @@ export class ChatView extends ItemView {
 				this.inputEl.focus();
 			});
 
-
-
-			const systemPrompt = "You are a helpful assistant. Provide exactly 3 short, distinct, and creative suggested questions the user could ask you based on the provided text. Output a valid JSON array of 3 strings. E.g. [\"question 1\", \"question 2\", \"question 3\"]";
-			
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-			const responseString = await aiProviders.execute({
-				messages: [
-					{ role: 'system', content: systemPrompt },
-					{ role: 'user', content: content.substring(0, 1500) }
-				],
-				provider: chatProvider,
-				model: chatModel,
-				abortController: new AbortController()
+			const summarizeBtn = promptsList.createEl('button', { text: '📝 Summarize this note' });
+			summarizeBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto' });
+			summarizeBtn.addEventListener('click', () => {
+				this.inputEl.value = `Summarize [[${file.path}]] `;
+				this.inputEl.focus();
 			});
 
-			let parsedResponseString = "";
-			if (typeof responseString === 'string') {
-				parsedResponseString = responseString;
-			} else if (responseString && typeof responseString === 'object') {
-				if (Symbol.asyncIterator in responseString) {
-					for await (const chunk of responseString) {
-						parsedResponseString += chunk || "";
-					}
-				} else {
-					parsedResponseString = String(responseString);
-				}
-			}
-
-			if (parsedResponseString.trim()) {
+			const generatePromptsBtn = promptsList.createEl('button', { text: '🎲 Generate AI suggestions...' });
+			generatePromptsBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', fontStyle: 'italic', color: 'var(--text-muted)' });
+			generatePromptsBtn.addEventListener('click', async () => {
+				generatePromptsBtn.textContent = '⏳ Generating...';
+				generatePromptsBtn.disabled = true;
 				try {
-					const suggestions = JSON.parse(parsedResponseString.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
-					if (Array.isArray(suggestions)) {
-						suggestions.slice(0, 3).forEach(s => {
-							const pBtn = promptsList.createEl('button', { text: s });
-							pBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', whiteSpace: 'normal' });
-							pBtn.addEventListener('click', () => {
-								this.inputEl.value = `${s} [[${file.path}]] `;
-								this.inputEl.focus();
+					const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+					const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, selectedModel);
+					if (!chatProvider) throw new Error("No provider");
+
+					const systemPrompt = "You are a helpful assistant. Provide exactly 3 short, distinct, and creative suggested questions the user could ask based on the provided text. Output a valid JSON array of 3 strings.";
+					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+					const responseString = await aiProviders.execute({
+						messages: [
+							{ role: 'system', content: systemPrompt },
+							{ role: 'user', content: content.substring(0, 1500) }
+						],
+						provider: chatProvider,
+						model: chatModel,
+						abortController: new AbortController()
+					});
+
+					let parsed = "";
+					if (typeof responseString === 'string') {
+						parsed = responseString;
+					} else if (responseString && typeof responseString === 'object') {
+						if (Symbol.asyncIterator in responseString) {
+							for await (const chunk of responseString) { parsed += chunk || ""; }
+						} else {
+							parsed = String(responseString);
+						}
+					}
+
+					generatePromptsBtn.remove();
+					if (parsed.trim()) {
+						const suggestions = JSON.parse(parsed.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
+						if (Array.isArray(suggestions)) {
+							suggestions.slice(0, 3).forEach(s => {
+								const pBtn = promptsList.createEl('button', { text: s });
+								pBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', whiteSpace: 'normal' });
+								pBtn.addEventListener('click', () => {
+									this.inputEl.value = `${s} [[${file.path}]] `;
+									this.inputEl.focus();
+								});
 							});
-						});
+						}
 					}
 				} catch {
-					const genericBtn = promptsList.createEl('button', { text: 'Summarize this note' });
-					genericBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto' });
-					genericBtn.addEventListener('click', () => {
-						this.inputEl.value = `Summarize [[${file.path}]] `;
-						this.inputEl.focus();
-					});
+					generatePromptsBtn.textContent = '🎲 Generate AI suggestions...';
+					generatePromptsBtn.disabled = false;
 				}
-			}
+			});
 
 		} catch (error) {
 			console.error("Error finding related notes:", error);
@@ -927,13 +908,13 @@ export class ChatView extends ItemView {
 				menu.addItem((item) => {
 					item.setTitle('Insert into active note')
 						.setIcon('pencil')
-						.onClick(() => {
-							const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-							if (activeView) {
-								activeView.editor.replaceSelection(selection);
-								new Notice("Inserted selection into note!");
+						.onClick(async () => {
+							const targetFile = this.findActiveNoteFile();
+							if (targetFile) {
+								await this.plugin.app.vault.process(targetFile, (data) => data + '\n' + selection);
+								new Notice(`Inserted into ${targetFile.name}!`);
 							} else {
-								new Notice("No active note to insert into.");
+								new Notice("No open note found. Open a note first.");
 							}
 						});
 				});
@@ -1000,28 +981,34 @@ export class ChatView extends ItemView {
 			const insertBtn = actionRow.createEl('button', { text: '↙️' });
 			insertBtn.title = "Insert in active note";
 			insertBtn.setCssStyles({ padding: '2px 5px', fontSize: '0.7em', height: 'auto', backgroundColor: 'transparent', border: 'none', boxShadow: 'none' });
-			insertBtn.addEventListener('click', () => {
-			let activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-			if (!activeView) {
-				// Try to find any open markdown view in other leaves
-				this.plugin.app.workspace.iterateAllLeaves(leaf => {
-					if (!activeView && leaf.view instanceof MarkdownView) {
-						activeView = leaf.view;
-					}
-				});
-			}
-			if (activeView) {
-				const editor = activeView.editor;
-				editor.setCursor(editor.lastLine(), editor.getLine(editor.lastLine()).length);
-				editor.replaceSelection('\n' + text);
-				new Notice("Inserted into note!");
+			insertBtn.addEventListener('click', async () => {
+			const targetFile = this.findActiveNoteFile();
+			if (targetFile) {
+				await this.plugin.app.vault.process(targetFile, (data) => data + '\n' + text);
+				new Notice(`Inserted into ${targetFile.name}!`);
 			} else {
-				new Notice("No open note found to insert into. Open a note first.");
+				new Notice("No open note found. Open a note first.");
 			}
 		});
 		}
 		
 		this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
+	}
+
+	findActiveNoteFile(): TFile | null {
+		// First try the most recent file from context
+		if (this.activeContextFiles.length > 0) {
+			const last = this.activeContextFiles[this.activeContextFiles.length - 1];
+			if (last && last.file.extension === 'md') return last.file;
+		}
+		// Then try to find a MarkdownView in any leaf
+		let found: TFile | null = null;
+		this.plugin.app.workspace.iterateAllLeaves(leaf => {
+			if (!found && leaf.view instanceof MarkdownView && leaf.view.file) {
+				found = leaf.view.file;
+			}
+		});
+		return found;
 	}
 
 	async readTFileToBase64(file: TFile): Promise<string> {
