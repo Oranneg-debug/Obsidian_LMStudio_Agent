@@ -592,14 +592,17 @@ export class ChatView extends ItemView {
 			const searchFiles = this.plugin.app.vault.getFiles().filter(f => (f.extension === 'md' || f.extension === 'canvas') && f.path !== file.path);
 			
 			let searchResults: { path: string, filename: string, score: number }[] = [];
+			let usedEmbedding = false;
 			
 			// Try embedding-based search first (BGE or other embedding model)
 			const embModelSetting = this.plugin.settings.embeddingModel;
 			if (embModelSetting) {
 				try {
 					const embParts = embModelSetting.split("::");
+					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 					const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
 					if (embProvider) {
+						console.log("Using embedding provider:", embProvider.name || embParts[0], "for related notes");
 						const documents = [];
 						for (const f of searchFiles) {
 							try {
@@ -607,6 +610,7 @@ export class ChatView extends ItemView {
 								if (dc.trim()) documents.push({ content: dc.substring(0, 2000), meta: { path: f.path, name: f.name } });
 							} catch { /* skip */ }
 						}
+						console.log(`Embedding search: ${documents.length} documents, query: "${extractedKeywords.join(' ').substring(0, 80)}..."`);
 						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
 						const results = await aiProviders.retrieve({
@@ -615,29 +619,37 @@ export class ChatView extends ItemView {
 							embeddingProvider: embProvider,
 							topK: 8
 						});
-						if (results && Array.isArray(results)) {
+						console.log("Embedding results:", results);
+						if (results && Array.isArray(results) && results.length > 0) {
 							// eslint-disable-next-line @typescript-eslint/no-explicit-any
 							searchResults = results.map((r: any) => ({
-								path: r.meta?.path || '',
-								filename: r.meta?.name || '',
+								path: r.meta?.path || r.path || '',
+								filename: r.meta?.name || r.filename || '',
 								score: Math.round((r.score || 0) * 100) / 100
-							}));
+							})).filter(r => r.path);
+							usedEmbedding = true;
+							console.log(`Embedding returned ${searchResults.length} results`);
 						}
+					} else {
+						console.warn("Embedding provider not found for id:", embParts[0]);
 					}
 				} catch (embErr) {
 					console.warn("Embedding search failed, falling back to keywords:", embErr);
 				}
 			}
 
-			// Fallback to keyword matching if embedding didn't work
+			// Keyword matching fallback (always works, no AI needed)
 			if (searchResults.length === 0) {
+				console.log("Using keyword fallback with:", extractedKeywords);
 				for (const f of searchFiles) {
 					try {
 						const docContent = await this.plugin.app.vault.cachedRead(f);
 						const docLower = docContent.toLowerCase();
+						const nameLower = f.basename.toLowerCase();
 						let score = 0;
 						for (const kw of extractedKeywords) {
 							if (kw && docLower.includes(kw)) score += 1;
+							if (kw && nameLower.includes(kw)) score += 2; // filename match is more relevant
 						}
 						if (score > 0) searchResults.push({ path: f.path, filename: f.name, score });
 					} catch { /* ignore */ }
@@ -652,7 +664,7 @@ export class ChatView extends ItemView {
 			const headerRow = this.relatableNotesContainer.createDiv();
 			headerRow.setCssStyles({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' });
 			
-			const notesTitle = headerRow.createDiv({ text: 'Related Notes:' });
+			const notesTitle = headerRow.createDiv({ text: `Related Notes${usedEmbedding ? ' (embedding)' : ''}:` });
 			notesTitle.setCssStyles({ fontWeight: 'bold', fontSize: '0.8em' });
 			
 			const refreshBtn = headerRow.createEl('button', { text: '↻' });
@@ -662,13 +674,18 @@ export class ChatView extends ItemView {
 				void this.handleFileOpen(file);
 			});
 
+			if (top8.length === 0) {
+				const noResults = this.relatableNotesContainer.createDiv({ text: 'No related notes found.' });
+				noResults.setCssStyles({ color: 'var(--text-muted)', fontSize: '0.8em', fontStyle: 'italic' });
+			}
+
 			const notesList = this.relatableNotesContainer.createDiv();
 			notesList.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginBottom: '10px' });
 			
 			top8.forEach((r) => {
 				const path = r.path;
 				if (!path) return;
-				const scoreLabel = r.score < 1 ? `${(r.score * 100).toFixed(0)}%` : `${r.score}`;
+				const scoreLabel = usedEmbedding ? `${(r.score * 100).toFixed(0)}%` : `${r.score}`;
 				const btn = notesList.createEl('button', { text: `${r.filename} (${scoreLabel})` });
 				btn.title = `Relevance: ${scoreLabel}`;
 				btn.setCssStyles({ fontSize: '0.7em', padding: '2px 5px', height: 'auto' });
