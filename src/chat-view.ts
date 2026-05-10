@@ -219,48 +219,43 @@ export class ChatView extends ItemView {
 			zIndex: '10'
 		});
 
-		const optionsContainer = inputWrapper.createDiv('agent-chat-options');
-		optionsContainer.setCssStyles({
-			display: 'none',
-			flexDirection: 'column',
-			paddingBottom: '10px',
-			gap: '5px'
-		});
+		// ── Compact toggles row ──
+		const toggleRow = inputWrapper.createDiv();
+		toggleRow.setCssStyles({ display: 'flex', gap: '12px', marginBottom: '6px', flexWrap: 'wrap' });
 
-		const toggleRow = optionsContainer.createDiv();
-		toggleRow.setCssStyles({ display: 'flex', gap: '15px' });
+		const mkToggle = (parent: HTMLElement, label: string, checked: boolean): HTMLInputElement => {
+			const lbl = parent.createEl('label', { text: ` ${label}` });
+			lbl.setCssStyles({ fontSize: '0.75em', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' });
+			const cb = document.createElement('input');
+			cb.type = 'checkbox';
+			cb.checked = checked;
+			cb.setCssStyles({ marginRight: '3px' });
+			lbl.prepend(cb);
+			return cb;
+		};
 
-		const ragLabel = toggleRow.createEl('label', { text: ' Use semantic search context' });
-		this.useRagCheckbox = document.createElement('input');
-		this.useRagCheckbox.type = 'checkbox';
-		this.useRagCheckbox.checked = true;
-		ragLabel.prepend(this.useRagCheckbox);
+		this.useRagCheckbox = mkToggle(toggleRow, 'Semantic search', true);
+		this.useMemoryCheckbox = mkToggle(toggleRow, 'Agent memory', true);
+		this.overridePromptCheckbox = mkToggle(toggleRow, 'Override prompt', false);
 
-		const overrideLabel = toggleRow.createEl('label', { text: ' Override system prompt' });
-		this.overridePromptCheckbox = document.createElement('input');
-		this.overridePromptCheckbox.type = 'checkbox';
-		overrideLabel.prepend(this.overridePromptCheckbox);
-
-		this.overridePromptTextarea = optionsContainer.createEl('textarea', { cls: 'agent-chat-input' });
-		this.overridePromptTextarea.setCssStyles({ display: 'none', resize: 'vertical' });
+		this.overridePromptTextarea = inputWrapper.createEl('textarea', { cls: 'agent-chat-input' });
+		this.overridePromptTextarea.setCssStyles({ display: 'none', resize: 'vertical', fontSize: '0.8em', marginBottom: '6px', minHeight: '50px' });
 		this.overridePromptTextarea.value = this.plugin.settings.sidebarChatPrompt;
-
 		this.overridePromptCheckbox.addEventListener('change', () => {
 			this.overridePromptTextarea.setCssStyles({ display: this.overridePromptCheckbox.checked ? 'block' : 'none' });
 		});
 
-		const attachRow = optionsContainer.createDiv();
-		attachRow.setCssStyles({ display: 'flex', alignItems: 'center' });
+		// ── Attachments list ──
+		this.attachmentsList = inputWrapper.createDiv();
+		this.attachmentsList.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap' });
 
+		// ── File input (hidden) ──
 		const fileInput = document.createElement('input');
 		fileInput.type = 'file';
 		fileInput.accept = 'image/*,.txt,.md,.json';
 		fileInput.multiple = true;
 		fileInput.setCssStyles({ display: 'none' });
-		const attachBtn = attachRow.createEl('button', { text: '📎 Attach files' });
-		attachBtn.title = "Attach file";
-		attachBtn.setCssStyles({ backgroundColor: 'var(--background-modifier-form-field)', boxShadow: 'none' });
-		attachBtn.addEventListener('click', () => fileInput.click());
+		inputWrapper.appendChild(fileInput);
 
 		fileInput.addEventListener('change', async (e) => {
 			const files = (e.target as HTMLInputElement).files;
@@ -311,55 +306,41 @@ export class ChatView extends ItemView {
 			fileInput.value = '';
 		});
 
-		this.attachmentsList = optionsContainer.createDiv();
-		this.attachmentsList.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap' });
+		// ── Tools panel (hidden by default) ──
+		const toolsPanel = inputWrapper.createDiv();
+		toolsPanel.setCssStyles({ display: 'none', gap: '5px', flexWrap: 'wrap', marginBottom: '6px' });
 
-		// ── Memory toggle ──
-		const memoryRow = optionsContainer.createDiv();
-		memoryRow.setCssStyles({ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '5px' });
-		const memLabel = memoryRow.createEl('label', { text: ' Include agent memory' });
-		memLabel.setCssStyles({ fontSize: '0.85em' });
-		this.useMemoryCheckbox = document.createElement('input');
-		this.useMemoryCheckbox.type = 'checkbox';
-		this.useMemoryCheckbox.checked = true;
-		memLabel.prepend(this.useMemoryCheckbox);
+		const tbs = { fontSize: '0.75em', padding: '3px 8px', height: 'auto', cursor: 'pointer' };
 
-		// ── Quick tool buttons ──
-		const toolsRow = optionsContainer.createDiv();
-		toolsRow.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
+		const mkTool = (emoji: string, label: string, onClick: () => void): HTMLButtonElement => {
+			const btn = toolsPanel.createEl('button', { text: `${emoji} ${label}` });
+			Object.assign(btn.style, tbs);
+			btn.addEventListener('click', onClick);
+			return btn;
+		};
 
-		const toolBtnStyle = { fontSize: '0.78em', padding: '3px 8px', height: 'auto', cursor: 'pointer' };
-
-		const dailyBtn = toolsRow.createEl('button', { text: '📅 Daily Note' });
-		Object.assign(dailyBtn.style, toolBtnStyle);
-		dailyBtn.title = "Add today's daily note to context";
-		dailyBtn.addEventListener('click', () => void this.toolDailyNote());
-
-		const imageBtn = toolsRow.createEl('button', { text: '🎨 Generate Image' });
-		Object.assign(imageBtn.style, toolBtnStyle);
-		imageBtn.title = "Generate an image via ComfyUI";
-		imageBtn.addEventListener('click', () => void this.toolGenerateImage());
-
-		const tagBtn = toolsRow.createEl('button', { text: '🏷️ Auto-tag' });
-		Object.assign(tagBtn.style, toolBtnStyle);
-		tagBtn.title = "Suggest tags for the active note";
-		tagBtn.addEventListener('click', () => void this.toolAutoTag());
-
-		const templateBtn = toolsRow.createEl('button', { text: '📄 Templates' });
-		Object.assign(templateBtn.style, toolBtnStyle);
-		templateBtn.title = "Insert a template into active note";
+		mkTool('📅', 'Daily Note', () => void this.toolDailyNote());
+		mkTool('🎨', 'Generate Image', () => void this.toolGenerateImage());
+		mkTool('🏷️', 'Auto-tag', () => void this.toolAutoTag());
+		const templateBtn = mkTool('📄', 'Templates', () => {});
 		templateBtn.addEventListener('click', () => void this.toolTemplates(templateBtn));
-
-		const dupeBtn = toolsRow.createEl('button', { text: '🔍 Find Duplicates' });
-		Object.assign(dupeBtn.style, toolBtnStyle);
-		dupeBtn.title = "Find similar notes using embeddings";
-		dupeBtn.addEventListener('click', () => void this.toolFindDuplicates());
-
-		const analyzeBtn = toolsRow.createEl('button', { text: '🧠 Analyze Vault' });
-		Object.assign(analyzeBtn.style, toolBtnStyle);
-		analyzeBtn.title = "Deep vault analysis → saved to memory";
+		mkTool('🔍', 'Find Duplicates', () => void this.toolFindDuplicates());
+		const analyzeBtn = mkTool('🧠', 'Analyze Vault', () => {});
 		analyzeBtn.addEventListener('click', () => void this.toolAnalyzeVault(analyzeBtn));
+		mkTool('📝', 'Summarize Note', () => {
+			const f = this.findActiveNoteFile();
+			if (f) { this.inputEl.value = `Summarize [[${f.path}]]`; this.inputEl.focus(); }
+			else new Notice("Open a note first.");
+		});
+		mkTool('🎲', 'AI Suggestions', () => void this.toolGenerateAISuggestions());
+		mkTool('✨', 'Help with Prompt', () => {
+			const f = this.findActiveNoteFile();
+			const meta = this.plugin.settings.metaPromptTemplate || "You are an expert prompt engineer. Help me write a prompt about:";
+			this.inputEl.value = meta + (f ? ` [[${f.path}]]` : '') + '\n\n';
+			this.inputEl.focus();
+		});
 
+		// ── Chat box ──
 		const chatBox = inputWrapper.createDiv('agent-chat-box');
 		chatBox.setCssStyles({
 			display: 'flex',
@@ -387,7 +368,7 @@ export class ChatView extends ItemView {
 			border: 'none',
 			boxShadow: 'none',
 			padding: '0',
-			marginBottom: '10px'
+			marginBottom: '8px'
 		});
 		this.inputEl.style.outline = 'none';
 
@@ -395,20 +376,27 @@ export class ChatView extends ItemView {
 		bottomRow.setCssStyles({ display: 'flex', justifyContent: 'space-between', alignItems: 'center' });
 
 		const leftControls = bottomRow.createDiv();
-		leftControls.setCssStyles({ display: 'flex', gap: '10px', alignItems: 'center' });
+		leftControls.setCssStyles({ display: 'flex', gap: '6px', alignItems: 'center' });
 
-		const toolsBtn = leftControls.createEl('button', { text: '+ Tools' });
-		toolsBtn.setCssStyles({ backgroundColor: 'transparent', boxShadow: 'none', color: 'var(--text-muted)' });
+		// + attach button
+		const attachBtnInline = leftControls.createEl('button', { text: '+' });
+		attachBtnInline.title = "Attach files";
+		attachBtnInline.setCssStyles({ backgroundColor: 'transparent', boxShadow: 'none', color: 'var(--text-muted)', fontWeight: 'bold', fontSize: '1.1em', padding: '0 4px', width: '28px', height: '28px' });
+		attachBtnInline.addEventListener('click', () => fileInput.click());
+
+		// Tools toggle
+		const toolsBtn = leftControls.createEl('button', { text: '⚙ Tools' });
+		toolsBtn.setCssStyles({ backgroundColor: 'transparent', boxShadow: 'none', color: 'var(--text-muted)', fontSize: '0.75em' });
 		toolsBtn.addEventListener('click', () => {
-			const isHidden = optionsContainer.style.display === 'none';
-			optionsContainer.setCssStyles({ display: isHidden ? 'flex' : 'none' });
+			const isHidden = toolsPanel.style.display === 'none';
+			toolsPanel.setCssStyles({ display: isHidden ? 'flex' : 'none' });
 		});
 
 		// Model selector
 		this.modelSelectorEl = leftControls.createEl('select');
 		this.modelSelectorEl.setCssStyles({
 			backgroundColor: 'transparent', border: 'none', boxShadow: 'none',
-			color: 'var(--text-muted)', fontSize: '0.75em', maxWidth: '150px', cursor: 'pointer'
+			color: 'var(--text-muted)', fontSize: '0.7em', maxWidth: '130px', cursor: 'pointer'
 		});
 		void this.populateModelSelector();
 
@@ -515,8 +503,7 @@ export class ChatView extends ItemView {
 						this.pendingAttachments = this.pendingAttachments.filter(f => f.path !== tfile.path);
 						fileItem.remove();
 					});
-					// Show the tools area so user sees the attachment
-					optionsContainer.setCssStyles({ display: 'flex' });
+					// Attachment is visible in the always-visible attachments list
 					new Notice(`Pasted image attached: ${name}`);
 				}
 			}
@@ -746,84 +733,7 @@ export class ChatView extends ItemView {
 						await leaf.openFile(tfile);
 					}
 				});
-			});
-
-			// Suggested prompts section — manual generation via button
-			const promptsRow = this.relatableNotesContainer.createDiv();
-			promptsRow.setCssStyles({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' });
-			const promptsTitle = promptsRow.createDiv({ text: 'Suggested Prompts:' });
-			promptsTitle.setCssStyles({ fontWeight: 'bold', fontSize: '0.8em' });
-
-			const promptsList = this.relatableNotesContainer.createDiv();
-			promptsList.setCssStyles({ display: 'flex', flexDirection: 'column', gap: '5px' });
-
-			const metaPrompt = this.plugin.settings.metaPromptTemplate || "You are an expert prompt engineer. Help me write a prompt about:";
-			const metaBtn = promptsList.createEl('button', { text: '✨ Help me write a prompt' });
-			metaBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', whiteSpace: 'normal' });
-			metaBtn.addEventListener('click', () => {
-				this.inputEl.value = metaPrompt + ` [[${file.path}]]\n\n`;
-				this.inputEl.focus();
-			});
-
-			const summarizeBtn = promptsList.createEl('button', { text: '📝 Summarize this note' });
-			summarizeBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto' });
-			summarizeBtn.addEventListener('click', () => {
-				this.inputEl.value = `Summarize [[${file.path}]] `;
-				this.inputEl.focus();
-			});
-
-			const generatePromptsBtn = promptsList.createEl('button', { text: '🎲 Generate AI suggestions...' });
-			generatePromptsBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', fontStyle: 'italic', color: 'var(--text-muted)' });
-			generatePromptsBtn.addEventListener('click', async () => {
-				generatePromptsBtn.textContent = '⏳ Generating...';
-				generatePromptsBtn.disabled = true;
-				try {
-					const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
-					const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, selectedModel);
-					if (!chatProvider) throw new Error("No provider");
-
-					const systemPrompt = "You are a helpful assistant. Provide exactly 3 short, distinct, and creative suggested questions the user could ask based on the provided text. Output a valid JSON array of 3 strings.";
-					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-					const responseString = await aiProviders.execute({
-						messages: [
-							{ role: 'system', content: systemPrompt },
-							{ role: 'user', content: content.substring(0, 1500) }
-						],
-						provider: chatProvider,
-						model: chatModel,
-						abortController: new AbortController()
-					});
-
-					let parsed = "";
-					if (typeof responseString === 'string') {
-						parsed = responseString;
-					} else if (responseString && typeof responseString === 'object') {
-						if (Symbol.asyncIterator in responseString) {
-							for await (const chunk of responseString) { parsed += chunk || ""; }
-						} else {
-							parsed = String(responseString);
-						}
-					}
-
-					generatePromptsBtn.remove();
-					if (parsed.trim()) {
-						const suggestions = JSON.parse(parsed.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
-						if (Array.isArray(suggestions)) {
-							suggestions.slice(0, 3).forEach(s => {
-								const pBtn = promptsList.createEl('button', { text: s });
-								pBtn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', whiteSpace: 'normal' });
-								pBtn.addEventListener('click', () => {
-									this.inputEl.value = `${s} [[${file.path}]] `;
-									this.inputEl.focus();
-								});
-							});
-						}
-					}
-				} catch {
-					generatePromptsBtn.textContent = '🎲 Generate AI suggestions...';
-					generatePromptsBtn.disabled = false;
-				}
-			});
+		});
 
 		} catch (error) {
 			console.error("Error finding related notes:", error);
@@ -1519,6 +1429,62 @@ Be specific, reference actual note names and tags from the data.`;
 		} finally {
 			btn.textContent = '🧠 Analyze Vault';
 			(btn as HTMLButtonElement).disabled = false;
+		}
+	}
+
+	// ── TOOL: Generate AI Suggestions ─────────────────────
+	async toolGenerateAISuggestions() {
+		const activeFile = this.findActiveNoteFile();
+		if (!activeFile) { new Notice("Open a note first."); return; }
+
+		new Notice("Generating suggestions...");
+		const content = await this.plugin.app.vault.cachedRead(activeFile);
+
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const aiResolver = await waitForAI();
+			const aiProviders = await aiResolver.promise as any;
+			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider, model } = this.getProviderAndModel(aiProviders, selectedModel);
+			if (!provider) { new Notice("No model configured."); return; }
+
+			const sysPrompt = "You are a helpful assistant. Provide exactly 3 short, distinct, and creative suggested questions or actions the user could take based on the provided note. Output a valid JSON array of 3 strings. Only output the JSON array, nothing else.";
+
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+			const resp = await aiProviders.execute({
+				messages: [
+					{ role: 'system', content: sysPrompt },
+					{ role: 'user', content: content.substring(0, 1500) }
+				],
+				provider, model,
+				abortController: new AbortController()
+			});
+
+			let respStr = typeof resp === 'string' ? resp : '';
+			if (resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
+				for await (const chunk of resp) respStr += chunk || '';
+			}
+
+			const parsed = JSON.parse(respStr.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
+			if (!Array.isArray(parsed)) throw new Error("Not an array");
+
+			const sugEl = this.messageContainer.createDiv('agent-message');
+			sugEl.setCssStyles({ padding: '8px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' });
+			sugEl.createEl('strong', { text: `🎲 Suggestions for ${activeFile.name}:` });
+			const btnRow = sugEl.createDiv();
+			btnRow.setCssStyles({ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '5px' });
+
+			for (const s of parsed.slice(0, 3)) {
+				const btn = btnRow.createEl('button', { text: s });
+				btn.setCssStyles({ fontSize: '0.8em', textAlign: 'left', height: 'auto', whiteSpace: 'normal' });
+				btn.addEventListener('click', () => {
+					this.inputEl.value = `${s} [[${activeFile.path}]]`;
+					this.inputEl.focus();
+				});
+			}
+			this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
+		} catch (err) {
+			new Notice("Failed to generate suggestions: " + String(err));
 		}
 	}
 
