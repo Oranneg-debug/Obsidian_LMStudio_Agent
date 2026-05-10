@@ -634,21 +634,35 @@ export class ChatView extends ItemView {
 			
 			// Try embedding-based search first (BGE or other embedding model)
 			const embModelSetting = this.plugin.settings.embeddingModel;
+			console.log("[EMBED-DEBUG] embeddingModel setting:", JSON.stringify(embModelSetting));
+			console.log("[EMBED-DEBUG] Available providers:", aiProviders.providers?.map((p: {id: string, name: string}) => `${p.id} (${p.name})`));
 			if (embModelSetting) {
 				try {
 					const embParts = embModelSetting.split("::");
+					console.log("[EMBED-DEBUG] Looking for provider ID:", embParts[0], "model:", embParts[1]);
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 					const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
 					if (embProvider) {
-						console.log("Using embedding provider:", embProvider.name || embParts[0], "for related notes");
+						console.log("[EMBED-DEBUG] Found provider:", JSON.stringify({ id: embProvider.id, name: embProvider.name, type: embProvider.type, url: embProvider.url, model: embProvider.model }));
+
+						// Direct embed test — does the model respond at all?
+						try {
+							console.log("[EMBED-DEBUG] Testing direct embed() call...");
+							// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+							const testEmbed = await aiProviders.embed({ input: ["test embedding connection"], provider: embProvider });
+							console.log("[EMBED-DEBUG] Direct embed() returned:", testEmbed?.length, "vectors, first vector length:", testEmbed?.[0]?.length);
+						} catch (testErr) {
+							console.error("[EMBED-DEBUG] Direct embed() FAILED:", testErr);
+						}
+
 						const documents = [];
-						for (const f of searchFiles) {
+						for (const f of searchFiles.slice(0, 50)) { // limit to 50 for speed
 							try {
 								const dc = await this.plugin.app.vault.cachedRead(f);
-								if (dc.trim()) documents.push({ content: dc.substring(0, 2000), meta: { path: f.path, name: f.name } });
+								if (dc.trim()) documents.push({ content: dc.substring(0, 1000), meta: { path: f.path, name: f.name } });
 							} catch { /* skip */ }
 						}
-						console.log(`Embedding search: ${documents.length} documents, query: "${extractedKeywords.join(' ').substring(0, 80)}..."`);
+						console.log(`[EMBED-DEBUG] Calling retrieve() with ${documents.length} documents`);
 						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
 						const results = await aiProviders.retrieve({
@@ -656,7 +670,10 @@ export class ChatView extends ItemView {
 							documents: documents,
 							embeddingProvider: embProvider
 						});
-						console.log("Embedding raw results:", results);
+						console.log("[EMBED-DEBUG] retrieve() returned:", results?.length, "results");
+						if (results && results.length > 0) {
+							console.log("[EMBED-DEBUG] First result:", JSON.stringify({ score: results[0].score, content: results[0].content?.substring(0, 100), docMeta: results[0].document?.meta }));
+						}
 						if (results && Array.isArray(results) && results.length > 0) {
 							searchResults = results.map((r) => ({
 								path: r.document?.meta?.path || '',
@@ -664,13 +681,13 @@ export class ChatView extends ItemView {
 								score: r.score || 0
 							})).filter(r => r.path);
 							usedEmbedding = true;
-							console.log(`Embedding returned ${searchResults.length} results`);
+							console.log(`[EMBED-DEBUG] Mapped ${searchResults.length} results with scores:`, searchResults.slice(0, 3).map(r => `${r.filename}: ${r.score}`));
 						}
 					} else {
-						console.warn("Embedding provider not found for id:", embParts[0]);
+						console.warn("[EMBED-DEBUG] Provider NOT FOUND for id:", embParts[0]);
 					}
 				} catch (embErr) {
-					console.warn("Embedding search failed, falling back to keywords:", embErr);
+					console.error("[EMBED-DEBUG] Embedding search EXCEPTION:", embErr);
 				}
 			}
 
