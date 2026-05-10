@@ -1145,7 +1145,9 @@ export class ChatView extends ItemView {
 			}
 			if (cache?.frontmatter?.tags) {
 				const fmTags = cache.frontmatter.tags;
-				if (Array.isArray(fmTags)) fmTags.forEach((t: string) => allTags.add(t.startsWith('#') ? t : '#' + t));
+				if (Array.isArray(fmTags)) fmTags.forEach((t: unknown) => {
+					if (t && typeof t === 'string') allTags.add(t.startsWith('#') ? t : '#' + t);
+				});
 				else if (typeof fmTags === 'string') allTags.add(fmTags.startsWith('#') ? fmTags : '#' + fmTags);
 			}
 		}
@@ -1276,7 +1278,48 @@ export class ChatView extends ItemView {
 								refreshed = true;
 							}
 						});
-						new Notice(`📄 Applied template "${tf.basename}" to ${activeFile.name}`);
+						new Notice(`📄 Applied template "${tf.basename}" — restructuring note...`);
+
+						// Use LLM to restructure the note content to fit the template
+						try {
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							const aiRes = await waitForAI();
+							const aiP = await aiRes.promise as any;
+							const selModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+							const { provider: p, model: m } = this.getProviderAndModel(aiP, selModel);
+							if (p) {
+								const currentContent = await this.plugin.app.vault.cachedRead(activeFile);
+								const sysPrompt = `You are a note formatter. You will receive a note that has a template structure and existing content. Reorganize the existing content to fit the template's sections and headings. Keep ALL existing information — do not remove anything. Fill template sections with relevant existing content. If a template section has no matching content, leave it with a placeholder comment like "<!-- TODO -->". Preserve the YAML frontmatter exactly as-is. Output ONLY the restructured note, nothing else.`;
+
+								// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+								const resp = await aiP.execute({
+									messages: [
+										{ role: 'system', content: sysPrompt },
+										{ role: 'user', content: `Here is the note to restructure:\n\n${currentContent}` }
+									],
+									provider: p, model: m,
+									abortController: new AbortController()
+								});
+
+								let respStr = typeof resp === 'string' ? resp : '';
+								if (!respStr && resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
+									for await (const chunk of resp) respStr += chunk || '';
+								}
+
+								if (respStr.trim()) {
+									// Clean markdown code fences the LLM might wrap it in
+									let cleaned = respStr.trim();
+									if (cleaned.startsWith('```')) {
+										cleaned = cleaned.replace(/^```(?:markdown|md)?\n?/, '').replace(/\n?```$/, '');
+									}
+									await this.plugin.app.vault.modify(activeFile, cleaned);
+									new Notice(`✅ Note restructured to fit "${tf.basename}" template`);
+								}
+							}
+						} catch (reErr) {
+							console.warn('Template restructuring failed:', reErr);
+							new Notice('Template applied but restructuring failed — content was added as-is.');
+						}
 					});
 			});
 		}
