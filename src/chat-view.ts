@@ -389,12 +389,12 @@ export class ChatView extends ItemView {
 			}
 		});
 
-		this.suggestionBox = chatBox.createDiv('agent-suggestion-box');
+		this.suggestionBox = inputWrapper.createDiv('agent-suggestion-box');
 		this.suggestionBox.setCssStyles({
-			display: 'none', position: 'absolute', bottom: '100%', left: '0', marginBottom: '5px',
+			display: 'none', position: 'absolute', bottom: '100%', left: '10px', marginBottom: '2px',
 			backgroundColor: 'var(--background-primary)', border: '1px solid var(--background-modifier-border)',
-			borderRadius: '5px', maxHeight: '150px', overflowY: 'auto',
-			zIndex: '1000', width: '250px', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+			borderRadius: '5px', maxHeight: '180px', overflowY: 'auto',
+			zIndex: '1000', width: '280px', boxShadow: '0 -4px 12px rgba(0,0,0,0.25)'
 		});
 
 		const triggerMentions = () => this.handleMentionsAndWorkflows();
@@ -495,13 +495,12 @@ export class ChatView extends ItemView {
 
 			if (aiProviders.providers) {
 				for (const provider of aiProviders.providers) {
-					// Skip embedding-only providers
-					const embSetting = this.plugin.settings.embeddingModel;
-					const isEmbeddingOnly = embSetting && embSetting.startsWith(provider.id + '::');
-					if (isEmbeddingOnly && !this.plugin.settings.chatModel.startsWith(provider.id + '::')) continue;
-
 					if (provider.availableModels && provider.availableModels.length > 0) {
 						for (const model of provider.availableModels) {
+							// Skip embedding-only models
+							const caps = provider.modelCapabilities?.[model];
+							if (caps && caps.embedding && !caps.text) continue;
+
 							const opt = this.modelSelectorEl.createEl('option', { text: `${model}` });
 							opt.value = `${provider.id}::${model}`;
 							if (opt.value === this.plugin.settings.chatModel) opt.selected = true;
@@ -618,19 +617,18 @@ export class ChatView extends ItemView {
 						console.log(`Embedding search: ${documents.length} documents, query: "${extractedKeywords.join(' ').substring(0, 80)}..."`);
 						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-						const results = await aiProviders.retrieve({
+							const results = await aiProviders.retrieve({
 							query: queryText,
 							documents: documents,
 							embeddingProvider: embProvider,
 							topK: 8
 						});
-						console.log("Embedding results:", results);
+						console.log("Embedding raw results:", results);
 						if (results && Array.isArray(results) && results.length > 0) {
-							// eslint-disable-next-line @typescript-eslint/no-explicit-any
-							searchResults = results.map((r: any) => ({
-								path: r.meta?.path || r.path || '',
-								filename: r.meta?.name || r.filename || '',
-								score: Math.round((r.score || 0) * 100) / 100
+							searchResults = results.map((r) => ({
+								path: r.document?.meta?.path || '',
+								filename: r.document?.meta?.name || '',
+								score: r.score || 0
 							})).filter(r => r.path);
 							usedEmbedding = true;
 							console.log(`Embedding returned ${searchResults.length} results`);
@@ -690,7 +688,7 @@ export class ChatView extends ItemView {
 			top8.forEach((r) => {
 				const path = r.path;
 				if (!path) return;
-				const scoreLabel = usedEmbedding ? `${Math.min(100, Math.round(r.score * 100))}%` : `${r.score}`;
+				const scoreLabel = usedEmbedding ? `${Math.round(r.score * 100)}%` : `${r.score}`;
 				const btn = notesList.createEl('button', { text: `${r.filename} (${scoreLabel})` });
 				btn.title = `Relevance: ${scoreLabel} — Click to open`;
 				btn.setCssStyles({ fontSize: '0.7em', padding: '2px 5px', height: 'auto' });
@@ -1460,6 +1458,9 @@ export class ChatView extends ItemView {
 
 			let isToolCallComplete = false;
 
+			// Streaming display element
+			let streamingEl: HTMLElement | null = null;
+
 			// Loading indicator
 			const loadingEl = this.messageContainer.createDiv();
 			loadingEl.innerText = 'Agent is thinking...';
@@ -1469,16 +1470,35 @@ export class ChatView extends ItemView {
 			});
 
 			while (!isToolCallComplete) {
+				// Create streaming element for live output
+				streamingEl = this.messageContainer.createDiv('agent-message');
+				streamingEl.setCssStyles({
+					whiteSpace: 'pre-wrap', fontSize: '0.9em', padding: '8px',
+					backgroundColor: 'var(--background-secondary)', borderRadius: '8px',
+					display: 'none'
+				});
+
 				const assistantMessage = await aiProviders.toolsExecute({
 					provider: chatProvider,
 					model: chatModel,
 					messages: currentHistory,
 					tools: tools,
-					tool_choice: "auto"
+					tool_choice: "auto",
+					abortController: this.activeAbortController || undefined,
+					onProgress: (chunk: string, accumulated: string) => {
+						if (loadingEl.parentElement) loadingEl.remove();
+						if (streamingEl) {
+							streamingEl.setCssStyles({ display: 'block' });
+							streamingEl.textContent = accumulated;
+							this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight });
+						}
+					}
 				});
 
 				currentHistory.push(assistantMessage);
 
+				// Replace streaming element with properly rendered markdown
+				if (streamingEl) streamingEl.remove();
 				if (assistantMessage.content) {
 					loadingEl.remove();
 					this.addMessageToUI('assistant', assistantMessage.content);
