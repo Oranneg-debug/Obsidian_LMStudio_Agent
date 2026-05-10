@@ -1154,25 +1154,30 @@ export class ChatView extends ItemView {
 				btn.setCssStyles({ fontSize: '0.8em', padding: '2px 8px', height: 'auto' });
 				btn.addEventListener('click', async () => {
 					const tagClean = tag.startsWith('#') ? tag.slice(1) : tag;
-					await this.plugin.app.vault.process(activeFile, (data) => {
-						if (data.startsWith('---')) {
-							const endIdx = data.indexOf('---', 3);
-							if (endIdx > 0) {
-								const fm = data.substring(0, endIdx);
-								if (fm.includes('tags:')) {
-									return data.substring(0, endIdx).replace(/tags:\s*(.*)/, (m, existing) => {
-										return `tags: ${existing}, ${tagClean}`;
-									}) + data.substring(endIdx);
-								} else {
-									return data.substring(0, endIdx) + `tags: [${tagClean}]\n` + data.substring(endIdx);
+					try {
+						await this.plugin.app.vault.process(activeFile, (data) => {
+							if (data.startsWith('---')) {
+								const endIdx = data.indexOf('---', 3);
+								if (endIdx > 0) {
+									const fm = data.substring(0, endIdx);
+									if (fm.includes('tags:')) {
+										return data.substring(0, endIdx).replace(/tags:\s*(.*)/, (m, existing) => {
+											return `tags: ${existing}, ${tagClean}`;
+										}) + data.substring(endIdx);
+									} else {
+										return data.substring(0, endIdx) + `tags: [${tagClean}]\n` + data.substring(endIdx);
+									}
 								}
 							}
-						}
-						return `---\ntags: [${tagClean}]\n---\n` + data;
-					});
-					btn.textContent = `✅ ${tag}`;
-					btn.disabled = true;
-					new Notice(`Added ${tag} to ${activeFile.name}`);
+							return `---\ntags: [${tagClean}]\n---\n` + data;
+						});
+						btn.textContent = `✅ ${tag}`;
+						btn.disabled = true;
+						new Notice(`Added ${tag} to ${activeFile.name}`);
+					} catch (tagErr) {
+						console.error('Auto-tag write failed:', tagErr);
+						new Notice(`Failed to add ${tag}: ${String(tagErr)}`);
+					}
 				});
 			}
 			this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
@@ -1200,7 +1205,17 @@ export class ChatView extends ItemView {
 						const activeFile = this.findActiveNoteFile();
 						if (!activeFile) { new Notice("Open a note first."); return; }
 						const templateContent = await this.plugin.app.vault.cachedRead(tf);
-						await this.plugin.app.vault.process(activeFile, (data) => data + '\n' + templateContent);
+						// Use vault.process to append, then force-refresh editor
+						await this.plugin.app.vault.process(activeFile, (data) => data + '\n\n' + templateContent);
+						// Force the editor to reload the file content
+						let refreshed = false;
+						this.plugin.app.workspace.iterateAllLeaves(leaf => {
+							if (!refreshed && leaf.view instanceof MarkdownView && leaf.view.file?.path === activeFile.path) {
+								// Obsidian should auto-refresh, but let's focus the leaf
+								this.plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
+								refreshed = true;
+							}
+						});
 						new Notice(`📄 Applied template "${tf.basename}" to ${activeFile.name}`);
 					});
 			});
@@ -1298,7 +1313,8 @@ export class ChatView extends ItemView {
 				const list = dupeEl.createDiv();
 				list.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
 				for (const r of top) {
-					const scoreLabel = `${Math.round(r.score * 100)}%`;
+					// Cosine scores are 0-1, keyword scores are integer counts
+					const scoreLabel = r.score <= 1 ? `${Math.round(r.score * 100)}%` : `${r.score} hits`;
 					const btn = list.createEl('button', { text: `${r.name} (${scoreLabel})` });
 					btn.setCssStyles({ fontSize: '0.75em', padding: '2px 6px', height: 'auto' });
 					btn.addEventListener('click', async () => {
