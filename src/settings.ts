@@ -24,6 +24,7 @@ export interface AgentPluginSettings {
 	enableFileModifications: boolean;
 	enableWebScraping: boolean;
 	modifyExcludeFolders: string[];
+	memoryFolder: string;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -41,7 +42,8 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	embeddingCacheBuster: 0,
 	enableFileModifications: false,
 	enableWebScraping: false,
-	modifyExcludeFolders: []
+	modifyExcludeFolders: [],
+	memoryFolder: ""
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -271,17 +273,20 @@ export class AgentSettingTab extends PluginSettingTab {
 					})
 				);
 
-			new Setting(div)
+			const promptSetting = new Setting(div)
 				.setName("System prompt")
-				.addTextArea(text => text
-					.setValue(cmd.prompt)
-					.onChange(async (value) => {
-						if (this.plugin.settings.customCommands[index]) {
-							this.plugin.settings.customCommands[index].prompt = value;
-							await this.plugin.saveSettings();
-						}
-					})
-				);
+				.addTextArea(text => {
+					text.setValue(cmd.prompt)
+						.onChange(async (value) => {
+							if (this.plugin.settings.customCommands[index]) {
+								this.plugin.settings.customCommands[index].prompt = value;
+								await this.plugin.saveSettings();
+							}
+						});
+					text.inputEl.setCssStyles({ width: '100%', minHeight: '80px' });
+					return text;
+				});
+			promptSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 		});
 
 		new Setting(containerEl)
@@ -337,6 +342,17 @@ export class AgentSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName("Agent Memory Folder")
+			.setDesc("Folder whose files are always loaded into the agent's system context as persistent memory/skills (e.g. 'Agent Memory'). Leave empty to disable.")
+			.addText(text => text
+				.setPlaceholder("Agent Memory")
+				.setValue(this.plugin.settings.memoryFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryFolder = value;
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl).setName("System prompts").setHeading();
 

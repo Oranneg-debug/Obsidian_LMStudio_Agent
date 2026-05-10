@@ -16,6 +16,11 @@ interface ISpeechRecognition {
 	onresult: (event: SpeechRecognitionEvent) => void;
 }
 
+interface ContextItem {
+	file: TFile;
+	weight: number;
+}
+
 export class ChatView extends ItemView {
 	plugin: ObsidianAgentPlugin;
 	messageContainer: HTMLElement;
@@ -27,7 +32,7 @@ export class ChatView extends ItemView {
 	overridePromptTextarea: HTMLTextAreaElement;
 	pendingAttachments: TFile[] = [];
 	attachmentsList: HTMLElement;
-	activeContextFiles: TFile[] = [];
+	activeContextFiles: ContextItem[] = [];
 	activeContextContainer: HTMLElement;
 	suggestionBox: HTMLElement;
 	scrollContainer: HTMLElement;
@@ -35,6 +40,8 @@ export class ChatView extends ItemView {
 	chatTitleInput: HTMLInputElement;
 	selectedSuggestionIndex: number = -1;
 	sessionPermissionsGranted: boolean = false;
+	activeAbortController: AbortController | null = null;
+	modelSelectorEl: HTMLSelectElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsidianAgentPlugin) {
 		super(leaf);
@@ -179,8 +186,25 @@ export class ChatView extends ItemView {
 			padding: '10px',
 			display: 'flex',
 			flexDirection: 'column',
-			gap: '10px',
+			gap: '6px',
 			flex: '1'
+		});
+
+		// Floating toggle for related notes
+		const contextToggle = container.createEl('button', { text: '📌 Context' });
+		contextToggle.title = 'Toggle related notes & suggested prompts';
+		contextToggle.setCssStyles({
+			position: 'absolute', top: '45px', right: '10px', zIndex: '20',
+			fontSize: '0.7em', padding: '2px 8px', height: 'auto', opacity: '0.7',
+			borderRadius: '10px'
+		});
+		contextToggle.addEventListener('click', () => {
+			const isVisible = this.relatableNotesContainer.style.display !== 'none';
+			this.relatableNotesContainer.setCssStyles({ display: isVisible ? 'none' : 'flex' });
+			contextToggle.setCssStyles({ opacity: isVisible ? '0.5' : '0.9' });
+			if (!isVisible) {
+				this.scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+			}
 		});
 
 		const inputWrapper = container.createDiv('agent-input-wrapper');
@@ -309,8 +333,9 @@ export class ChatView extends ItemView {
 		});
 		this.inputEl.setCssStyles({
 			flex: '1',
-			resize: 'none',
-			height: '60px',
+			resize: 'vertical',
+			height: '80px',
+			minHeight: '60px',
 			backgroundColor: 'transparent',
 			border: 'none',
 			boxShadow: 'none',
@@ -341,6 +366,21 @@ export class ChatView extends ItemView {
 			display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0'
 		});
 
+		const stopBtn = rightControls.createEl('button', { text: '■' });
+		stopBtn.title = 'Stop generating';
+		stopBtn.setCssStyles({
+			borderRadius: '50%', width: '32px', height: '32px',
+			display: 'none', alignItems: 'center', justifyContent: 'center', padding: '0',
+			backgroundColor: 'var(--text-error)'
+		});
+		stopBtn.addEventListener('click', () => {
+			if (this.activeAbortController) {
+				this.activeAbortController.abort();
+				this.activeAbortController = null;
+				stopBtn.setCssStyles({ display: 'none' });
+			}
+		});
+
 		this.suggestionBox = chatBox.createDiv('agent-suggestion-box');
 		this.suggestionBox.setCssStyles({
 			display: 'none', position: 'absolute', bottom: '100%', left: '0', marginBottom: '5px',
@@ -357,7 +397,7 @@ export class ChatView extends ItemView {
 		});
 		this.inputEl.addEventListener('click', triggerMentions);
 
-		sendBtn.addEventListener('click', () => void this.sendMessage());
+		sendBtn.addEventListener('click', () => void this.sendMessage(stopBtn));
 		this.inputEl.addEventListener('keydown', (e) => {
 			if (this.suggestionBox.style.display === 'block') {
 				const items = this.suggestionBox.children;
@@ -390,7 +430,40 @@ export class ChatView extends ItemView {
 
 			if (e.key === 'Enter' && !e.shiftKey) {
 				e.preventDefault();
-				void this.sendMessage();
+				void this.sendMessage(stopBtn);
+			}
+		});
+
+		// Paste handler for images
+		this.inputEl.addEventListener('paste', async (e) => {
+			const items = e.clipboardData?.items;
+			if (!items) return;
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item && item.type.startsWith('image/')) {
+					e.preventDefault();
+					const blob = item.getAsFile();
+					if (!blob) continue;
+					const mediaFolder = 'media';
+					const folder = this.plugin.app.vault.getAbstractFileByPath(mediaFolder);
+					if (!folder) {
+						try { await this.plugin.app.vault.createFolder(mediaFolder); } catch { /* exists */ }
+					}
+					const ext = item.type.split('/')[1] || 'png';
+					const name = `pasted-${Date.now()}.${ext}`;
+					const buffer = await blob.arrayBuffer();
+					const tfile = await this.plugin.app.vault.createBinary(`${mediaFolder}/${name}`, buffer);
+					this.pendingAttachments.push(tfile);
+					const fileItem = this.attachmentsList.createDiv({ text: `📎 ${tfile.name}` });
+					fileItem.setCssStyles({ cursor: 'pointer', backgroundColor: 'var(--background-secondary)', padding: '2px 5px', borderRadius: '3px', fontSize: '0.8em' });
+					fileItem.addEventListener('click', () => {
+						this.pendingAttachments = this.pendingAttachments.filter(f => f.path !== tfile.path);
+						fileItem.remove();
+					});
+					// Show the tools area so user sees the attachment
+					optionsContainer.setCssStyles({ display: 'flex' });
+					new Notice(`Pasted image attached: ${name}`);
+				}
 			}
 		});
 
@@ -405,26 +478,45 @@ export class ChatView extends ItemView {
 
 	renderActiveContextRibbon() {
 		this.activeContextContainer.empty();
-		this.activeContextFiles.forEach(file => {
-			const item = this.activeContextContainer.createDiv({ text: `📄 ${file.name}` });
+		this.activeContextFiles.forEach((ctx, idx) => {
+			const item = this.activeContextContainer.createDiv();
 			item.setCssStyles({
 				cursor: 'pointer', backgroundColor: 'var(--background-secondary)',
 				padding: '2px 5px', borderRadius: '3px', fontSize: '0.8em',
 				display: 'flex', alignItems: 'center', gap: '3px',
 				border: '1px solid var(--background-modifier-border)'
 			});
-			item.title = "Click to remove from context";
-			item.addEventListener('click', () => {
-				this.activeContextFiles = this.activeContextFiles.filter(f => f.path !== file.path);
-				item.remove();
+
+			const weightBadge = item.createEl('span', { text: `${ctx.weight}` });
+			weightBadge.setCssStyles({
+				backgroundColor: 'var(--interactive-accent)', color: 'var(--text-on-accent)',
+				borderRadius: '50%', width: '16px', height: '16px', display: 'inline-flex',
+				alignItems: 'center', justifyContent: 'center', fontSize: '0.7em', fontWeight: 'bold', flexShrink: '0'
+			});
+			weightBadge.title = 'Click to cycle weight (1-5)';
+			weightBadge.addEventListener('click', (e) => {
+				e.stopPropagation();
+				ctx.weight = ctx.weight >= 5 ? 1 : ctx.weight + 1;
+				this.renderActiveContextRibbon();
+			});
+
+			item.createEl('span', { text: `📄 ${ctx.file.name}` });
+
+			const closeBtn = item.createEl('span', { text: '×' });
+			closeBtn.setCssStyles({ marginLeft: '4px', fontWeight: 'bold', opacity: '0.6', cursor: 'pointer' });
+			closeBtn.title = 'Remove from context';
+			closeBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.activeContextFiles.splice(idx, 1);
+				this.renderActiveContextRibbon();
 			});
 		});
 	}
 
 	async handleFileOpen(file: TFile | null) {
 		if (file && file instanceof TFile && file.path.endsWith('.md')) {
-			if (!this.activeContextFiles.some(f => f.path === file.path)) {
-				this.activeContextFiles.push(file);
+			if (!this.activeContextFiles.some(c => c.file.path === file.path)) {
+				this.activeContextFiles.push({ file, weight: 1 });
 				this.renderActiveContextRibbon();
 			}
 		}
@@ -696,11 +788,11 @@ export class ChatView extends ItemView {
 					item.addEventListener('click', () => {
 						let newTextBefore = "";
 						if (trigger === '@') {
-							newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, ``);
+							newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, `@${file.basename} `);
 							this.inputEl.value = newTextBefore + textAfterCursor;
 							
-							if (!this.activeContextFiles.some(f => f.path === file.path)) {
-								this.activeContextFiles.push(file);
+							if (!this.activeContextFiles.some(c => c.file.path === file.path)) {
+								this.activeContextFiles.push({ file, weight: 1 });
 								this.renderActiveContextRibbon();
 							}
 						} else {
@@ -748,7 +840,7 @@ export class ChatView extends ItemView {
 		});
 
 		const contentDiv = msgEl.createDiv();
-		contentDiv.setCssStyles({ whiteSpace: 'pre-wrap', marginBottom: role === 'assistant' ? '20px' : '0' });
+		contentDiv.setCssStyles({ whiteSpace: 'pre-wrap', marginBottom: '0' });
 		void MarkdownRenderer.renderMarkdown(displayContent, contentDiv, this.plugin.app.workspace.getActiveFile()?.path || "", new Component());
 
 		contentDiv.addEventListener('contextmenu', (e) => {
@@ -784,7 +876,7 @@ export class ChatView extends ItemView {
 							if (folder === "/") folder = "";
 							const timestamp = new Date().getTime();
 							const file = await this.plugin.app.vault.create(`${folder ? folder + '/' : ''}New Note ${timestamp}.md`, selection);
-							const leaf = this.plugin.app.workspace.getLeaf(false);
+							const leaf = this.plugin.app.workspace.getLeaf('tab');
 							await leaf.openFile(file);
 						});
 				});
@@ -840,14 +932,24 @@ export class ChatView extends ItemView {
 			insertBtn.title = "Insert in active note";
 			insertBtn.setCssStyles({ padding: '2px 5px', fontSize: '0.7em', height: 'auto', backgroundColor: 'transparent', border: 'none', boxShadow: 'none' });
 			insertBtn.addEventListener('click', () => {
-				const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-				if (activeView) {
-					activeView.editor.replaceSelection(text);
-					new Notice("Inserted into note!");
-				} else {
-					new Notice("No active note to insert into.");
-				}
-			});
+			let activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView) {
+				// Try to find any open markdown view in other leaves
+				this.plugin.app.workspace.iterateAllLeaves(leaf => {
+					if (!activeView && leaf.view instanceof MarkdownView) {
+						activeView = leaf.view;
+					}
+				});
+			}
+			if (activeView) {
+				const editor = activeView.editor;
+				editor.setCursor(editor.lastLine(), editor.getLine(editor.lastLine()).length);
+				editor.replaceSelection('\n' + text);
+				new Notice("Inserted into note!");
+			} else {
+				new Notice("No open note found to insert into. Open a note first.");
+			}
+		});
 		}
 		
 		this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
@@ -955,14 +1057,14 @@ export class ChatView extends ItemView {
 			const file = await this.plugin.app.vault.create(filename, content);
 			new Notice(`Chat saved to ${file.path}`);
 			
-			const leaf = this.plugin.app.workspace.getLeaf(false);
+			const leaf = this.plugin.app.workspace.getLeaf('tab');
 			await leaf.openFile(file);
 		} catch (err) {
 			new Notice("Error saving chat: " + String(err));
 		}
 	}
 
-	async sendMessage() {
+	async sendMessage(stopBtn?: HTMLElement) {
 		const text = this.inputEl.value.trim();
 		if (!text && this.pendingAttachments.length === 0) return;
 
@@ -1024,13 +1126,14 @@ export class ChatView extends ItemView {
 		this.attachmentsList.empty();
 
 		if (this.activeContextFiles.length > 0) {
-			for (const file of this.activeContextFiles) {
-				if (file.extension === 'canvas') {
-					const canvasText = await this.parseCanvasToText(file);
-					messageContent += `\n\n${canvasText}`;
+			for (const ctx of this.activeContextFiles) {
+				const weightLabel = ctx.weight > 1 ? ` [IMPORTANCE: ${ctx.weight}/5]` : '';
+				if (ctx.file.extension === 'canvas') {
+					const canvasText = await this.parseCanvasToText(ctx.file);
+					messageContent += `\n\n${canvasText}${weightLabel}`;
 				} else {
-					const content = await this.plugin.app.vault.read(file);
-					messageContent += `\n\n--- Context from ${file.path} ---\n${content}`;
+					const content = await this.plugin.app.vault.read(ctx.file);
+					messageContent += `\n\n--- Context from ${ctx.file.path}${weightLabel} ---\n${content}`;
 				}
 			}
 		}
@@ -1237,8 +1340,24 @@ export class ChatView extends ItemView {
 			const activeSystemPrompt = this.overridePromptCheckbox.checked 
 				? this.overridePromptTextarea.value 
 				: this.plugin.settings.sidebarChatPrompt;
-				
-			currentHistory.unshift({ role: "system", content: activeSystemPrompt });
+
+			// Inject memory folder contents
+			let memoryContext = '';
+			const memFolder = this.plugin.settings.memoryFolder?.trim();
+			if (memFolder) {
+				const memFiles = this.plugin.app.vault.getFiles().filter(f => f.path.startsWith(memFolder + '/') || f.path.startsWith(memFolder + '\\'));
+				for (const mf of memFiles) {
+					try {
+						const mc = await this.plugin.app.vault.cachedRead(mf);
+						memoryContext += `\n\n--- Agent Memory: ${mf.name} ---\n${mc}`;
+					} catch { /* skip */ }
+				}
+			}
+			
+			currentHistory.unshift({ role: "system", content: activeSystemPrompt + memoryContext });
+
+			this.activeAbortController = new AbortController();
+			if (stopBtn) stopBtn.setCssStyles({ display: 'flex' });
 
 			let isToolCallComplete = false;
 
@@ -1403,6 +1522,8 @@ export class ChatView extends ItemView {
 			if(loadingEl.parentElement) {
 				loadingEl.remove();
 			}
+			this.activeAbortController = null;
+			if (stopBtn) stopBtn.setCssStyles({ display: 'none' });
 
 		} catch (error) {
 			console.error("Agent error:", error);
