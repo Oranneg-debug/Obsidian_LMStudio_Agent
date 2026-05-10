@@ -25,6 +25,9 @@ export interface AgentPluginSettings {
 	enableWebScraping: boolean;
 	modifyExcludeFolders: string[];
 	memoryFolder: string;
+	comfyUIUrl: string;
+	comfyUIWorkflow: string;
+	autoAnalyzeOnStartup: boolean;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -43,7 +46,10 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	enableFileModifications: false,
 	enableWebScraping: false,
 	modifyExcludeFolders: [],
-	memoryFolder: ""
+	memoryFolder: "",
+	comfyUIUrl: "http://127.0.0.1:8188",
+	comfyUIWorkflow: "",
+	autoAnalyzeOnStartup: false
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -321,6 +327,47 @@ export class AgentSettingTab extends PluginSettingTab {
 					this.plugin.settings.chatHistoryFolder = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName("Auto-analyze vault on startup")
+			.setDesc("Automatically run vault analysis when Obsidian starts (saves to memory folder).")
+			.addToggle(toggle => {
+				toggle
+					.setValue(this.plugin.settings.autoAnalyzeOnStartup)
+					.onChange(async (value) => {
+						this.plugin.settings.autoAnalyzeOnStartup = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// ── ComfyUI (collapsible) ───────────────────────────
+		const comfySection = this.createCollapsible(containerEl, '🎨 ComfyUI Integration');
+
+		new Setting(comfySection)
+			.setName("ComfyUI URL")
+			.setDesc("Local ComfyUI API endpoint.")
+			.addText(text => text
+				.setPlaceholder("http://127.0.0.1:8188")
+				.setValue(this.plugin.settings.comfyUIUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.comfyUIUrl = value;
+					await this.plugin.saveSettings();
+				}));
+
+		const comfyWorkflowSetting = new Setting(comfySection)
+			.setName("Custom workflow JSON")
+			.setDesc("Paste a ComfyUI workflow JSON. Use {prompt} as a placeholder for the text prompt.");
+		comfyWorkflowSetting.addTextArea((text) => {
+			text.setPlaceholder('{"prompt": {prompt}}')
+				.setValue(this.plugin.settings.comfyUIWorkflow)
+				.onChange(async (value) => {
+					this.plugin.settings.comfyUIWorkflow = value;
+					await this.plugin.saveSettings();
+				});
+			text.inputEl.setCssStyles({ width: '100%', minHeight: '80px', marginTop: '6px', fontFamily: 'monospace', fontSize: '0.8em' });
+			return text;
+		});
+		comfyWorkflowSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 
 		// ── Editor Commands (collapsible) ───────────────────
 		const cmdSection = this.createCollapsible(containerEl, '⌨️ Editor Commands');

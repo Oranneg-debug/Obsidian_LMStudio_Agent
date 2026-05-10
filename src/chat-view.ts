@@ -42,6 +42,7 @@ export class ChatView extends ItemView {
 	sessionPermissionsGranted: boolean = false;
 	activeAbortController: AbortController | null = null;
 	modelSelectorEl: HTMLSelectElement;
+	useMemoryCheckbox: HTMLInputElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsidianAgentPlugin) {
 		super(leaf);
@@ -313,6 +314,52 @@ export class ChatView extends ItemView {
 		this.attachmentsList = optionsContainer.createDiv();
 		this.attachmentsList.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap' });
 
+		// ── Memory toggle ──
+		const memoryRow = optionsContainer.createDiv();
+		memoryRow.setCssStyles({ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '5px' });
+		const memLabel = memoryRow.createEl('label', { text: ' Include agent memory' });
+		memLabel.setCssStyles({ fontSize: '0.85em' });
+		this.useMemoryCheckbox = document.createElement('input');
+		this.useMemoryCheckbox.type = 'checkbox';
+		this.useMemoryCheckbox.checked = true;
+		memLabel.prepend(this.useMemoryCheckbox);
+
+		// ── Quick tool buttons ──
+		const toolsRow = optionsContainer.createDiv();
+		toolsRow.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
+
+		const toolBtnStyle = { fontSize: '0.78em', padding: '3px 8px', height: 'auto', cursor: 'pointer' };
+
+		const dailyBtn = toolsRow.createEl('button', { text: '📅 Daily Note' });
+		Object.assign(dailyBtn.style, toolBtnStyle);
+		dailyBtn.title = "Add today's daily note to context";
+		dailyBtn.addEventListener('click', () => void this.toolDailyNote());
+
+		const imageBtn = toolsRow.createEl('button', { text: '🎨 Generate Image' });
+		Object.assign(imageBtn.style, toolBtnStyle);
+		imageBtn.title = "Generate an image via ComfyUI";
+		imageBtn.addEventListener('click', () => void this.toolGenerateImage());
+
+		const tagBtn = toolsRow.createEl('button', { text: '🏷️ Auto-tag' });
+		Object.assign(tagBtn.style, toolBtnStyle);
+		tagBtn.title = "Suggest tags for the active note";
+		tagBtn.addEventListener('click', () => void this.toolAutoTag());
+
+		const templateBtn = toolsRow.createEl('button', { text: '📄 Templates' });
+		Object.assign(templateBtn.style, toolBtnStyle);
+		templateBtn.title = "Insert a template into active note";
+		templateBtn.addEventListener('click', () => void this.toolTemplates(templateBtn));
+
+		const dupeBtn = toolsRow.createEl('button', { text: '🔍 Find Duplicates' });
+		Object.assign(dupeBtn.style, toolBtnStyle);
+		dupeBtn.title = "Find similar notes using embeddings";
+		dupeBtn.addEventListener('click', () => void this.toolFindDuplicates());
+
+		const analyzeBtn = toolsRow.createEl('button', { text: '🧠 Analyze Vault' });
+		Object.assign(analyzeBtn.style, toolBtnStyle);
+		analyzeBtn.title = "Deep vault analysis → saved to memory";
+		analyzeBtn.addEventListener('click', () => void this.toolAnalyzeVault(analyzeBtn));
+
 		const chatBox = inputWrapper.createDiv('agent-chat-box');
 		chatBox.setCssStyles({
 			display: 'flex',
@@ -389,12 +436,12 @@ export class ChatView extends ItemView {
 			}
 		});
 
-		this.suggestionBox = inputWrapper.createDiv('agent-suggestion-box');
+		this.suggestionBox = chatBox.createDiv('agent-suggestion-box');
 		this.suggestionBox.setCssStyles({
-			display: 'none', position: 'absolute', bottom: '100%', left: '10px', marginBottom: '2px',
+			display: 'none', position: 'absolute', bottom: '100%', left: '0', marginBottom: '2px',
 			backgroundColor: 'var(--background-primary)', border: '1px solid var(--background-modifier-border)',
 			borderRadius: '5px', maxHeight: '180px', overflowY: 'auto',
-			zIndex: '1000', width: '280px', boxShadow: '0 -4px 12px rgba(0,0,0,0.25)'
+			zIndex: '9999', width: '280px', boxShadow: '0 -4px 12px rgba(0,0,0,0.25)'
 		});
 
 		const triggerMentions = () => this.handleMentionsAndWorkflows();
@@ -1034,6 +1081,448 @@ export class ChatView extends ItemView {
 		return found;
 	}
 
+	// ── TOOL: Daily Note ──────────────────────────────────
+	async toolDailyNote() {
+		const today = new Date();
+		const formats = [
+			`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`,
+			`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`
+		];
+		let dailyFile: TFile | null = null;
+		for (const f of this.plugin.app.vault.getFiles()) {
+			if (f.extension === 'md' && formats.some(fmt => f.basename === fmt || f.basename.includes(fmt))) {
+				dailyFile = f;
+				break;
+			}
+		}
+		if (dailyFile) {
+			if (!this.activeContextFiles.some(c => c.file.path === dailyFile!.path)) {
+				this.activeContextFiles.push({ file: dailyFile, weight: 3 });
+				this.renderActiveContextRibbon();
+			}
+			new Notice(`📅 Added ${dailyFile.name} to context`);
+		} else {
+			new Notice("No daily note found for today.");
+		}
+	}
+
+	// ── TOOL: Generate Image (ComfyUI) ────────────────────
+	async toolGenerateImage() {
+		const comfyUrl = this.plugin.settings.comfyUIUrl?.trim() || 'http://127.0.0.1:8188';
+		const prompt = this.inputEl.value.trim();
+		if (!prompt) {
+			new Notice("Type an image description in the chatbox first, then click Generate Image.");
+			this.inputEl.focus();
+			return;
+		}
+
+		this.addMessageToUI('user', `🎨 Generate image: ${prompt}`);
+		this.inputEl.value = '';
+		new Notice("Sending to ComfyUI...");
+
+		try {
+			const customWorkflow = this.plugin.settings.comfyUIWorkflow?.trim();
+			let payload: string;
+			if (customWorkflow) {
+				payload = customWorkflow.replace(/\{prompt\}/g, prompt.replace(/"/g, '\\"'));
+			} else {
+				// Simple txt2img workflow
+				payload = JSON.stringify({
+					prompt: {
+						"3": { class_type: "KSampler", inputs: { seed: Math.floor(Math.random() * 1e15), steps: 20, cfg: 7, sampler_name: "euler", scheduler: "normal", denoise: 1, model: ["4", 0], positive: ["6", 0], negative: ["7", 0], latent_image: ["5", 0] } },
+						"4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: "sd_xl_base_1.0.safetensors" } },
+						"5": { class_type: "EmptyLatentImage", inputs: { width: 1024, height: 1024, batch_size: 1 } },
+						"6": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["4", 1] } },
+						"7": { class_type: "CLIPTextEncode", inputs: { text: "ugly, blurry, bad quality", clip: ["4", 1] } },
+						"8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["4", 2] } },
+						"9": { class_type: "SaveImage", inputs: { filename_prefix: "obsidian", images: ["8", 0] } }
+					}
+				});
+			}
+
+			const resp = await requestUrl({ url: `${comfyUrl}/prompt`, method: 'POST', body: payload, headers: { 'Content-Type': 'application/json' } });
+			if (resp.status === 200) {
+				const data = resp.json as { prompt_id?: string };
+				this.addMessageToUI('assistant', `✅ Image generation queued! Prompt ID: \`${data.prompt_id || 'unknown'}\`\n\nCheck ComfyUI for the result. Once done, save the image to your vault's \`media/\` folder and embed with \`![[media/filename.png]]\``);
+			} else {
+				this.addMessageToUI('assistant', `❌ ComfyUI returned status ${resp.status}. Make sure ComfyUI is running at ${comfyUrl}`);
+			}
+		} catch (err) {
+			this.addMessageToUI('assistant', `❌ Could not connect to ComfyUI at ${comfyUrl}. Error: ${String(err)}`);
+		}
+	}
+
+	// ── TOOL: Auto-tag ────────────────────────────────────
+	async toolAutoTag() {
+		const activeFile = this.findActiveNoteFile();
+		if (!activeFile) {
+			new Notice("Open a note first to auto-tag it.");
+			return;
+		}
+
+		new Notice("Analyzing note for tags...");
+		const content = await this.plugin.app.vault.cachedRead(activeFile);
+
+		// Collect existing tags across vault
+		const allTags = new Set<string>();
+		for (const f of this.plugin.app.vault.getMarkdownFiles()) {
+			const cache = this.plugin.app.metadataCache.getFileCache(f);
+			if (cache?.tags) {
+				for (const t of cache.tags) allTags.add(t.tag);
+			}
+			if (cache?.frontmatter?.tags) {
+				const fmTags = cache.frontmatter.tags;
+				if (Array.isArray(fmTags)) fmTags.forEach((t: string) => allTags.add(t.startsWith('#') ? t : '#' + t));
+				else if (typeof fmTags === 'string') allTags.add(fmTags.startsWith('#') ? fmTags : '#' + fmTags);
+			}
+		}
+
+		const tagList = [...allTags].slice(0, 100).join(', ');
+
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const aiResolver = await waitForAI();
+			const aiProviders = await aiResolver.promise as any;
+			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider, model } = this.getProviderAndModel(aiProviders, selectedModel);
+			if (!provider) { new Notice("No model configured."); return; }
+
+			const sysPrompt = `You are a tag suggestion engine. Given a note and existing tags from the vault, suggest the 5 best tags for this note. Prefer existing tags when they fit. Output a valid JSON array of strings (e.g. ["#tag1", "#tag2"]). Only output the JSON array, nothing else.`;
+
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+			const resp = await aiProviders.execute({
+				messages: [
+					{ role: 'system', content: sysPrompt },
+					{ role: 'user', content: `Existing tags: ${tagList}\n\nNote content:\n${content.substring(0, 2000)}` }
+				],
+				provider, model,
+				abortController: new AbortController()
+			});
+
+			let respStr = typeof resp === 'string' ? resp : '';
+			if (resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
+				for await (const chunk of resp) respStr += chunk || '';
+			}
+
+			const parsed = JSON.parse(respStr.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
+			if (!Array.isArray(parsed)) throw new Error("Not an array");
+
+			// Show as clickable buttons in chat
+			const tagRow = this.messageContainer.createDiv('agent-message');
+			tagRow.setCssStyles({ padding: '8px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' });
+			tagRow.createEl('strong', { text: `🏷️ Suggested tags for ${activeFile.name}:` });
+			const btnRow = tagRow.createDiv();
+			btnRow.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
+
+			for (const tag of parsed.slice(0, 5)) {
+				const btn = btnRow.createEl('button', { text: tag });
+				btn.setCssStyles({ fontSize: '0.8em', padding: '2px 8px', height: 'auto' });
+				btn.addEventListener('click', async () => {
+					const tagClean = tag.startsWith('#') ? tag.slice(1) : tag;
+					await this.plugin.app.vault.process(activeFile, (data) => {
+						if (data.startsWith('---')) {
+							const endIdx = data.indexOf('---', 3);
+							if (endIdx > 0) {
+								const fm = data.substring(0, endIdx);
+								if (fm.includes('tags:')) {
+									return data.substring(0, endIdx).replace(/tags:\s*(.*)/, (m, existing) => {
+										return `tags: ${existing}, ${tagClean}`;
+									}) + data.substring(endIdx);
+								} else {
+									return data.substring(0, endIdx) + `tags: [${tagClean}]\n` + data.substring(endIdx);
+								}
+							}
+						}
+						return `---\ntags: [${tagClean}]\n---\n` + data;
+					});
+					btn.textContent = `✅ ${tag}`;
+					btn.disabled = true;
+					new Notice(`Added ${tag} to ${activeFile.name}`);
+				});
+			}
+			this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
+		} catch (err) {
+			new Notice("Failed to generate tags: " + String(err));
+		}
+	}
+
+	// ── TOOL: Templates ───────────────────────────────────
+	async toolTemplates(anchorBtn: HTMLElement) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const internalPlugins = (this.plugin.app as any).internalPlugins;
+		let templateFolder = 'Templates';
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+			const templatePlugin = internalPlugins?.getPluginById?.('templates');
+			if (templatePlugin?.instance?.options?.folder) {
+				// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+				templateFolder = templatePlugin.instance.options.folder;
+			}
+		} catch { /* fallback */ }
+
+		const templateFiles = this.plugin.app.vault.getFiles().filter(f => f.extension === 'md' && f.path.startsWith(templateFolder));
+
+		if (templateFiles.length === 0) {
+			new Notice(`No templates found in "${templateFolder}/" folder.`);
+			return;
+		}
+
+		const menu = new Menu();
+		for (const tf of templateFiles) {
+			menu.addItem(item => {
+				item.setTitle(tf.basename)
+					.setIcon('file-text')
+					.onClick(async () => {
+						const activeFile = this.findActiveNoteFile();
+						if (!activeFile) { new Notice("Open a note first."); return; }
+						const templateContent = await this.plugin.app.vault.cachedRead(tf);
+						await this.plugin.app.vault.process(activeFile, (data) => data + '\n' + templateContent);
+						new Notice(`📄 Applied template "${tf.basename}" to ${activeFile.name}`);
+					});
+			});
+		}
+		menu.showAtMouseEvent(new MouseEvent('click', { clientX: anchorBtn.getBoundingClientRect().left, clientY: anchorBtn.getBoundingClientRect().top }));
+	}
+
+	// ── TOOL: Find Duplicates ─────────────────────────────
+	async toolFindDuplicates() {
+		const activeFile = this.findActiveNoteFile();
+		if (!activeFile) { new Notice("Open a note first."); return; }
+
+		new Notice("Searching for similar notes...");
+		const content = await this.plugin.app.vault.cachedRead(activeFile);
+
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const aiResolver = await waitForAI();
+			const aiProviders = await aiResolver.promise as any;
+			const embModelSetting = this.plugin.settings.embeddingModel;
+
+			const searchFiles = this.plugin.app.vault.getFiles().filter(f => f.extension === 'md' && f.path !== activeFile.path);
+			let results: { name: string, path: string, score: number }[] = [];
+
+			if (embModelSetting) {
+				const embParts = embModelSetting.split("::");
+				// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+				const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
+				if (embProvider) {
+					const documents = [];
+					for (const f of searchFiles) {
+						try {
+							const dc = await this.plugin.app.vault.cachedRead(f);
+							if (dc.trim()) documents.push({ content: dc.substring(0, 2000), meta: { path: f.path, name: f.name } });
+						} catch { /* skip */ }
+					}
+					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+					const embResults = await aiProviders.retrieve({
+						query: content.substring(0, 2000),
+						documents, embeddingProvider: embProvider, topK: 10
+					});
+					if (Array.isArray(embResults)) {
+						results = embResults.map((r: { score: number, document: { meta?: { path?: string, name?: string } } }) => ({
+							name: r.document?.meta?.name || '', path: r.document?.meta?.path || '', score: r.score
+						})).filter(r => r.path);
+					}
+				}
+			}
+
+			// Fallback keyword
+			if (results.length === 0) {
+				const words = content.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 4);
+				const freq = new Map<string, number>();
+				for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
+				const keywords = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(e => e[0]);
+				for (const f of searchFiles) {
+					try {
+						const dc = (await this.plugin.app.vault.cachedRead(f)).toLowerCase();
+						let score = 0;
+						for (const kw of keywords) if (dc.includes(kw)) score++;
+						if (score >= 2) results.push({ name: f.name, path: f.path, score });
+					} catch { /* skip */ }
+				}
+				results.sort((a, b) => b.score - a.score);
+			}
+
+			const top = results.slice(0, 8);
+			const dupeEl = this.messageContainer.createDiv('agent-message');
+			dupeEl.setCssStyles({ padding: '8px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' });
+			dupeEl.createEl('strong', { text: `🔍 Similar to "${activeFile.name}":` });
+
+			if (top.length === 0) {
+				dupeEl.createEl('p', { text: 'No similar notes found.' });
+			} else {
+				const list = dupeEl.createDiv();
+				list.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
+				for (const r of top) {
+					const scoreLabel = `${Math.round(r.score * 100)}%`;
+					const btn = list.createEl('button', { text: `${r.name} (${scoreLabel})` });
+					btn.setCssStyles({ fontSize: '0.75em', padding: '2px 6px', height: 'auto' });
+					btn.addEventListener('click', async () => {
+						const tfile = this.plugin.app.vault.getAbstractFileByPath(r.path);
+						if (tfile instanceof TFile) await this.plugin.app.workspace.getLeaf('tab').openFile(tfile);
+					});
+				}
+			}
+			this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
+		} catch (err) {
+			new Notice("Duplicate search failed: " + String(err));
+		}
+	}
+
+	// ── TOOL: Analyze Vault ───────────────────────────────
+	async toolAnalyzeVault(btn: HTMLElement) {
+		const memFolder = this.plugin.settings.memoryFolder?.trim();
+		if (!memFolder) {
+			new Notice("Set an Agent Memory folder in settings first.");
+			return;
+		}
+
+		btn.textContent = '⏳ Analyzing...';
+		(btn as HTMLButtonElement).disabled = true;
+		new Notice("Starting vault analysis... This may take a moment.");
+
+		try {
+			const allFiles = this.plugin.app.vault.getMarkdownFiles();
+			const allTags = new Map<string, number>();
+			const linkCounts = new Map<string, number>();
+			const orphans: string[] = [];
+			let totalWords = 0;
+			const sampleTexts: string[] = [];
+
+			for (const f of allFiles) {
+				const cache = this.plugin.app.metadataCache.getFileCache(f);
+				const linkCount = (cache?.links?.length || 0) + (cache?.embeds?.length || 0);
+				linkCounts.set(f.path, linkCount);
+
+				if (linkCount === 0) {
+					orphans.push(f.path);
+				}
+
+				if (cache?.tags) {
+					for (const t of cache.tags) allTags.set(t.tag, (allTags.get(t.tag) || 0) + 1);
+				}
+				if (cache?.frontmatter?.tags) {
+					const fmTags = cache.frontmatter.tags;
+					const arr = Array.isArray(fmTags) ? fmTags : [fmTags];
+					for (const t of arr) {
+						const tag = String(t).startsWith('#') ? String(t) : '#' + String(t);
+						allTags.set(tag, (allTags.get(tag) || 0) + 1);
+					}
+				}
+
+				try {
+					const content = await this.plugin.app.vault.cachedRead(f);
+					const wc = content.split(/\s+/).length;
+					totalWords += wc;
+					if (sampleTexts.length < 15) sampleTexts.push(content.substring(0, 500));
+				} catch { /* skip */ }
+			}
+
+			const sortedLinks = [...linkCounts.entries()].sort((a, b) => b[1] - a[1]);
+			const topLinked = sortedLinks.slice(0, 10);
+			const sortedTags = [...allTags.entries()].sort((a, b) => b[1] - a[1]);
+			const topTags = sortedTags.slice(0, 20);
+			const folders = new Set(allFiles.map(f => f.path.split('/').slice(0, -1).join('/')));
+
+			// Build stats summary for LLM
+			const stats = `
+Vault stats:
+- ${allFiles.length} markdown notes
+- ${folders.size} folders
+- ${allTags.size} unique tags
+- ${totalWords} total words (avg ${Math.round(totalWords / Math.max(allFiles.length, 1))} per note)
+- ${orphans.length} orphan notes (no links in or out)
+
+Top 10 most-linked notes:
+${topLinked.map(([p, c]) => `- ${p} (${c} outgoing links)`).join('\n')}
+
+Top 20 tags:
+${topTags.map(([t, c]) => `- ${t} (${c})`).join('\n')}
+
+Sample writing (from ${sampleTexts.length} notes):
+${sampleTexts.map((s, i) => `--- Sample ${i + 1} ---\n${s}`).join('\n\n')}
+`;
+
+			// Ask LLM to produce the analysis
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const aiResolver = await waitForAI();
+			const aiProviders = await aiResolver.promise as any;
+			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider, model } = this.getProviderAndModel(aiProviders, selectedModel);
+			if (!provider) { new Notice("No model configured."); return; }
+
+			const sysPrompt = `You are a knowledge management analyst. Analyze this Obsidian vault and produce a comprehensive vault profile in markdown format. Include these sections:
+
+## Vault Profile
+Stats and structural overview.
+
+## Personal Writing Style
+Analyze the sample texts for: typical sentence structure, vocabulary level (casual/academic/technical), tone, common patterns (lists vs prose), language preferences.
+
+## Tag Taxonomy
+Organize the top tags into clusters, identify missing tags.
+
+## Knowledge Architecture
+Main pillars/areas, well-connected vs isolated areas, stale vs active.
+
+## 10 Highest-Leverage Notes
+Rank by potential impact: which notes, if expanded or refined, would create the most value? Consider link centrality, incompleteness, and strategic importance.
+
+## Suggested Actions
+Specific next steps: notes to link, gaps to fill, MOC candidates, stale content to review.
+
+Be specific, reference actual note names and tags from the data.`;
+
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+			const resp = await aiProviders.execute({
+				messages: [
+					{ role: 'system', content: sysPrompt },
+					{ role: 'user', content: stats }
+				],
+				provider, model,
+				abortController: new AbortController()
+			});
+
+			let analysis = typeof resp === 'string' ? resp : '';
+			if (resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
+				for await (const chunk of resp) analysis += chunk || '';
+			}
+
+			// Save to memory folder
+			const analysisContent = `---\ntitle: Vault Analysis\ndate: ${new Date().toISOString().split('T')[0]}\ntype: agent-memory\n---\n\n${analysis}`;
+
+			const folder = this.plugin.app.vault.getAbstractFileByPath(memFolder);
+			if (!folder) {
+				await this.plugin.app.vault.createFolder(memFolder);
+			}
+
+			const filePath = `${memFolder}/Vault Analysis.md`;
+			const existing = this.plugin.app.vault.getAbstractFileByPath(filePath);
+			if (existing instanceof TFile) {
+				await this.plugin.app.vault.modify(existing, analysisContent);
+			} else {
+				await this.plugin.app.vault.create(filePath, analysisContent);
+			}
+
+			this.addMessageToUI('assistant', `🧠 **Vault analysis complete!** Saved to \`${filePath}\`.\n\nKey stats: ${allFiles.length} notes, ${allTags.size} tags, ${orphans.length} orphans.`);
+			new Notice(`Vault analysis saved to ${filePath}`);
+
+			// Open the analysis
+			const analysisFile = this.plugin.app.vault.getAbstractFileByPath(filePath);
+			if (analysisFile instanceof TFile) {
+				const leaf = this.plugin.app.workspace.getLeaf('tab');
+				await leaf.openFile(analysisFile);
+			}
+		} catch (err) {
+			new Notice("Vault analysis failed: " + String(err));
+			console.error("Vault analysis error:", err);
+		} finally {
+			btn.textContent = '🧠 Analyze Vault';
+			(btn as HTMLButtonElement).disabled = false;
+		}
+	}
+
+
 	async readTFileToBase64(file: TFile): Promise<string> {
 		const buffer = await this.plugin.app.vault.readBinary(file);
 		const bytes = new Uint8Array(buffer);
@@ -1441,7 +1930,7 @@ export class ChatView extends ItemView {
 			// Inject memory folder contents
 			let memoryContext = '';
 			const memFolder = this.plugin.settings.memoryFolder?.trim();
-			if (memFolder) {
+			if (memFolder && this.useMemoryCheckbox?.checked) {
 				const memFiles = this.plugin.app.vault.getFiles().filter(f => f.path.startsWith(memFolder + '/') || f.path.startsWith(memFolder + '\\'));
 				for (const mf of memFiles) {
 					try {
