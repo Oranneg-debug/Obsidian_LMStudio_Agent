@@ -994,6 +994,45 @@ export class ChatView extends ItemView {
 				new Notice("No open note found. Open a note first.");
 			}
 		});
+
+			const createNoteBtn = actionRow.createEl('button', { text: '📝' });
+			createNoteBtn.title = "Create new note from this answer";
+			createNoteBtn.setCssStyles({ padding: '2px 5px', fontSize: '0.7em', height: 'auto', backgroundColor: 'transparent', border: 'none', boxShadow: 'none' });
+			createNoteBtn.addEventListener('click', async () => {
+				// Generate a title from the first line or first 40 chars
+				const firstLine = text.split('\n').find(l => l.trim().length > 0) || 'AI Response';
+				const title = firstLine.replace(/^#+\s*/, '').replace(/[\\/:*?"<>|]/g, '').substring(0, 60).trim() || 'AI Response';
+				const now = new Date();
+				const dateStr = now.toISOString().split('T')[0];
+
+				const frontmatter = [
+					'---',
+					`title: "${title}"`,
+					`date: ${dateStr}`,
+					`created: ${now.toISOString()}`,
+					'source: ai-agent',
+					'tags: [ai-generated]',
+					'---'
+				].join('\n');
+
+				const body = text.trim().startsWith('#') ? text : `# ${title}\n\n${text}`;
+				const fullContent = `${frontmatter}\n\n${body}`;
+
+				let folder = this.plugin.settings.chatHistoryFolder || '';
+				if (!folder) folder = '';
+				const safeName = title.replace(/[\\/:*?"<>|]/g, '-');
+				const filePath = folder ? `${folder}/${safeName}.md` : `${safeName}.md`;
+
+				// Ensure folder exists
+				if (folder && !this.plugin.app.vault.getAbstractFileByPath(folder)) {
+					try { await this.plugin.app.vault.createFolder(folder); } catch { /* exists */ }
+				}
+
+				const file = await this.plugin.app.vault.create(filePath, fullContent);
+				const leaf = this.plugin.app.workspace.getLeaf('tab');
+				await leaf.openFile(file);
+				new Notice(`📝 Created note: ${safeName}`);
+			});
 		}
 		
 		this.scrollContainer.scrollTo({ top: this.scrollContainer.scrollHeight, behavior: 'smooth' });
@@ -1141,6 +1180,8 @@ export class ChatView extends ItemView {
 
 			const parsed = JSON.parse(respStr.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
 			if (!Array.isArray(parsed)) throw new Error("Not an array");
+			const validTags = parsed.filter(t => t && typeof t === 'string').slice(0, 5);
+			if (validTags.length === 0) throw new Error("No valid tags in response");
 
 			// Show as clickable buttons in chat
 			const tagRow = this.messageContainer.createDiv('agent-message');
@@ -1149,7 +1190,7 @@ export class ChatView extends ItemView {
 			const btnRow = tagRow.createDiv();
 			btnRow.setCssStyles({ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' });
 
-			for (const tag of parsed.slice(0, 5)) {
+			for (const tag of validTags) {
 				const btn = btnRow.createEl('button', { text: tag });
 				btn.setCssStyles({ fontSize: '0.8em', padding: '2px 8px', height: 'auto' });
 				btn.addEventListener('click', async () => {
@@ -1205,13 +1246,32 @@ export class ChatView extends ItemView {
 						const activeFile = this.findActiveNoteFile();
 						if (!activeFile) { new Notice("Open a note first."); return; }
 						const templateContent = await this.plugin.app.vault.cachedRead(tf);
-						// Use vault.process to append, then force-refresh editor
-						await this.plugin.app.vault.process(activeFile, (data) => data + '\n\n' + templateContent);
-						// Force the editor to reload the file content
+						// Check if template has frontmatter; if so prepend it properly
+						await this.plugin.app.vault.process(activeFile, (data) => {
+							const hasFrontmatter = data.trim().startsWith('---');
+							const templateHasFM = templateContent.trim().startsWith('---');
+
+							if (templateHasFM && !hasFrontmatter) {
+								// Note has no frontmatter, template does — prepend template
+								return templateContent + '\n\n' + data;
+							} else if (templateHasFM && hasFrontmatter) {
+								// Both have frontmatter — merge: keep note's FM, append template body after FM
+								const endIdx = data.indexOf('---', 3);
+								const tplEndIdx = templateContent.indexOf('---', 3);
+								const tplBody = tplEndIdx > 0 ? templateContent.substring(tplEndIdx + 3).trim() : templateContent;
+								if (endIdx > 0) {
+									return data.substring(0, endIdx + 3) + '\n\n' + tplBody + '\n\n' + data.substring(endIdx + 3).trim();
+								}
+								return data + '\n\n' + tplBody;
+							} else {
+								// No frontmatter anywhere — just prepend
+								return templateContent + '\n\n' + data;
+							}
+						});
+						// Focus the editor leaf
 						let refreshed = false;
 						this.plugin.app.workspace.iterateAllLeaves(leaf => {
 							if (!refreshed && leaf.view instanceof MarkdownView && leaf.view.file?.path === activeFile.path) {
-								// Obsidian should auto-refresh, but let's focus the leaf
 								this.plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
 								refreshed = true;
 							}
