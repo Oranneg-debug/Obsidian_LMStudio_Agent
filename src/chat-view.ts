@@ -329,7 +329,7 @@ export class ChatView extends ItemView {
 
 		this.inputEl = chatBox.createEl('textarea', {
 			cls: 'agent-chat-input',
-			attr: { placeholder: 'Ask anything, @ to mention and / for workflows' }
+			attr: { placeholder: 'Ask anything, paste a YouTube link, @ to mention or [[ to link' }
 		});
 		this.inputEl.setCssStyles({
 			flex: '1',
@@ -495,6 +495,11 @@ export class ChatView extends ItemView {
 
 			if (aiProviders.providers) {
 				for (const provider of aiProviders.providers) {
+					// Skip embedding-only providers
+					const embSetting = this.plugin.settings.embeddingModel;
+					const isEmbeddingOnly = embSetting && embSetting.startsWith(provider.id + '::');
+					if (isEmbeddingOnly && !this.plugin.settings.chatModel.startsWith(provider.id + '::')) continue;
+
 					if (provider.availableModels && provider.availableModels.length > 0) {
 						for (const model of provider.availableModels) {
 							const opt = this.modelSelectorEl.createEl('option', { text: `${model}` });
@@ -685,13 +690,16 @@ export class ChatView extends ItemView {
 			top8.forEach((r) => {
 				const path = r.path;
 				if (!path) return;
-				const scoreLabel = usedEmbedding ? `${(r.score * 100).toFixed(0)}%` : `${r.score}`;
+				const scoreLabel = usedEmbedding ? `${Math.min(100, Math.round(r.score * 100))}%` : `${r.score}`;
 				const btn = notesList.createEl('button', { text: `${r.filename} (${scoreLabel})` });
-				btn.title = `Relevance: ${scoreLabel}`;
+				btn.title = `Relevance: ${scoreLabel} — Click to open`;
 				btn.setCssStyles({ fontSize: '0.7em', padding: '2px 5px', height: 'auto' });
-				btn.addEventListener('click', () => {
-					this.inputEl.value += ` [[${path}]] `;
-					this.inputEl.focus();
+				btn.addEventListener('click', async () => {
+					const tfile = this.plugin.app.vault.getAbstractFileByPath(path);
+					if (tfile instanceof TFile) {
+						const leaf = this.plugin.app.workspace.getLeaf('tab');
+						await leaf.openFile(tfile);
+					}
 				});
 			});
 

@@ -61,6 +61,30 @@ export class AgentSettingTab extends PluginSettingTab {
 		void this.buildUI(containerEl);
 	}
 
+	private createCollapsible(containerEl: HTMLElement, title: string, defaultOpen = false): HTMLElement {
+		const wrapper = containerEl.createDiv();
+		const header = wrapper.createDiv();
+		header.setCssStyles({
+			display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+			padding: '8px 0', borderBottom: '1px solid var(--background-modifier-border)',
+			marginBottom: '8px', userSelect: 'none'
+		});
+		const arrow = header.createSpan({ text: defaultOpen ? '▼' : '►' });
+		arrow.setCssStyles({ fontSize: '0.7em', color: 'var(--text-muted)' });
+		header.createSpan({ text: title }).setCssStyles({ fontWeight: '600', fontSize: '0.95em' });
+
+		const content = wrapper.createDiv();
+		content.setCssStyles({ display: defaultOpen ? 'block' : 'none', paddingLeft: '4px' });
+
+		header.addEventListener('click', () => {
+			const isOpen = content.style.display !== 'none';
+			content.setCssStyles({ display: isOpen ? 'none' : 'block' });
+			arrow.textContent = isOpen ? '►' : '▼';
+		});
+
+		return content;
+	}
+
 	async buildUI(containerEl: HTMLElement) {
 		const aiResolver = await waitForAI();
 		const aiProviders = await aiResolver.promise;
@@ -80,11 +104,12 @@ export class AgentSettingTab extends PluginSettingTab {
 			}
 		}
 
-		new Setting(containerEl).setName("Models configuration").setHeading();
+		// ── Models ──────────────────────────────────────────
+		new Setting(containerEl).setName("Models").setHeading();
 
 		new Setting(containerEl)
 			.setName("Sidebar chat model")
-			.setDesc("Select the provider and model to use for the sidebar chat.")
+			.setDesc("Provider and model for the sidebar chat.")
 			.addDropdown(dropdown => {
 				dropdown.addOptions(modelsRecord)
 					.setValue(this.plugin.settings.chatModel)
@@ -96,7 +121,7 @@ export class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Editor rewrite & autocomplete model")
-			.setDesc("Select the provider and model to use for editor actions.")
+			.setDesc("Provider and model for editor actions.")
 			.addDropdown(dropdown => {
 				dropdown.addOptions(modelsRecord)
 					.setValue(this.plugin.settings.editModel)
@@ -108,7 +133,7 @@ export class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Embedding model")
-			.setDesc("Select the provider and model to use for generating document embeddings for semantic search.")
+			.setDesc("Model used for semantic search and related notes (e.g. BGE).")
 			.addDropdown(dropdown => {
 				dropdown.addOptions(modelsRecord)
 					.setValue(this.plugin.settings.embeddingModel)
@@ -118,11 +143,12 @@ export class AgentSettingTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl).setName("Semantic search configuration").setHeading();
+		// ── Semantic Search ─────────────────────────────────
+		const searchSection = this.createCollapsible(containerEl, '🔍 Semantic Search');
 
-		new Setting(containerEl)
-			.setName("Update Embeddings")
-			.setDesc("Pre-calculate embeddings for your vault to speed up semantic search.")
+		new Setting(searchSection)
+			.setName("Update embeddings")
+			.setDesc("Pre-calculate embeddings for your vault.")
 			.addButton((button) => {
 				button.setButtonText("Start embedding process").onClick(async () => {
 					new Notice("Embedding process started... (Running in background)");
@@ -153,22 +179,22 @@ export class AgentSettingTab extends PluginSettingTab {
 				});
 			});
 
-		new Setting(containerEl)
+		new Setting(searchSection)
 			.setName("Clear embedding cache")
-			.setDesc("If your related notes are stuck showing the same files, click this to force the AI to completely re-scan your vault with the current model.")
+			.setDesc("Force re-scan vault with current model.")
 			.addButton((button) => {
 				button.setButtonText("Reset Cache")
 				.setWarning()
 				.onClick(async () => {
 					this.plugin.settings.embeddingCacheBuster = (this.plugin.settings.embeddingCacheBuster || 0) + 1;
 					await this.plugin.saveSettings();
-					new Notice("Embedding cache reset! Notes will be re-scanned next time they are searched.");
+					new Notice("Embedding cache reset!");
 				});
 			});
 
-		new Setting(containerEl)
+		new Setting(searchSection)
 			.setName("Included folders")
-			.setDesc("Folders to index for semantic search. Use '/' for the entire vault.")
+			.setDesc("Folders to index. Use '/' for entire vault.")
 			.addButton((button) => {
 				button.setButtonText("Add folder").onClick(async () => {
 					this.plugin.settings.ragFolders.push("");
@@ -178,7 +204,7 @@ export class AgentSettingTab extends PluginSettingTab {
 			});
 
 		this.plugin.settings.ragFolders.forEach((folder, index) => {
-			new Setting(containerEl)
+			new Setting(searchSection)
 				.addText(text => text
 					.setPlaceholder("Folder name")
 					.setValue(folder)
@@ -198,9 +224,9 @@ export class AgentSettingTab extends PluginSettingTab {
 				);
 		});
 
-		new Setting(containerEl)
+		new Setting(searchSection)
 			.setName("Excluded folders")
-			.setDesc("Folders to explicitly ignore during semantic search.")
+			.setDesc("Folders to ignore during search.")
 			.addButton((button) => {
 				button.setButtonText("Add folder").onClick(async () => {
 					this.plugin.settings.excludeFolders.push("");
@@ -210,7 +236,7 @@ export class AgentSettingTab extends PluginSettingTab {
 			});
 
 		this.plugin.settings.excludeFolders.forEach((folder, index) => {
-			new Setting(containerEl)
+			new Setting(searchSection)
 				.addText(text => text
 					.setPlaceholder("Folder name")
 					.setValue(folder)
@@ -230,11 +256,77 @@ export class AgentSettingTab extends PluginSettingTab {
 				);
 		});
 
-		new Setting(containerEl).setName("Custom commands").setHeading();
-		
+		// ── Agentic Capabilities ────────────────────────────
+		new Setting(containerEl).setName("Agent Capabilities").setHeading();
+
 		new Setting(containerEl)
-			.setName("Editor commands")
-			.setDesc("Add your own custom commands.")
+			.setName("Enable file modifications")
+			.setDesc("Allow the agent to edit, move, and delete files. Requires permission per action.")
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.enableFileModifications)
+					.onChange(async (value) => {
+						this.plugin.settings.enableFileModifications = value;
+						await this.plugin.saveSettings();
+						this.display();
+					});
+			});
+
+		if (this.plugin.settings.enableFileModifications) {
+			new Setting(containerEl)
+				.setName("Modification exclude folders")
+				.setDesc("Folders the agent cannot modify. Comma-separated.")
+				.addTextArea((text) => {
+					text
+						.setPlaceholder("Templates, Archive")
+						.setValue(this.plugin.settings.modifyExcludeFolders.join(", "))
+						.onChange(async (value) => {
+							this.plugin.settings.modifyExcludeFolders = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+							await this.plugin.saveSettings();
+						});
+					text.inputEl.setCssStyles({ width: '100%' });
+				});
+		}
+
+		new Setting(containerEl)
+			.setName("Enable web scraping & YouTube")
+			.setDesc("Allow web search (DuckDuckGo), URL fetching, and YouTube transcript summarization.")
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.enableWebScraping)
+					.onChange(async (value) => {
+						this.plugin.settings.enableWebScraping = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Agent memory folder")
+			.setDesc("Files in this folder are always injected into the agent's context.")
+			.addText(text => text
+				.setPlaceholder("Agent Memory")
+				.setValue(this.plugin.settings.memoryFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryFolder = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Chat history folder")
+			.setDesc("Where saved chats are stored.")
+			.addText(text => text
+				.setPlaceholder("AI Chats")
+				.setValue(this.plugin.settings.chatHistoryFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.chatHistoryFolder = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// ── Editor Commands (collapsible) ───────────────────
+		const cmdSection = this.createCollapsible(containerEl, '⌨️ Editor Commands');
+
+		new Setting(cmdSection)
+			.setDesc("Custom editor commands that appear in the right-click menu.")
 			.addButton((button) => {
 				button.setButtonText("Add command").onClick(async () => {
 					this.plugin.settings.customCommands.push({ id: `custom-cmd-${Date.now()}`, name: "", prompt: "" });
@@ -244,7 +336,7 @@ export class AgentSettingTab extends PluginSettingTab {
 			});
 
 		this.plugin.settings.customCommands.forEach((cmd, index) => {
-			const div = containerEl.createDiv();
+			const div = cmdSection.createDiv();
 			div.setCssStyles({
 				border: "1px solid var(--background-modifier-border)",
 				padding: "10px",
@@ -289,76 +381,11 @@ export class AgentSettingTab extends PluginSettingTab {
 			promptSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 		});
 
-		new Setting(containerEl)
-			.setName("Chat history folder")
-			.setDesc("Folder path where your AI chats will be saved (e.g. 'AI Chats'). It will be created if it doesn't exist.")
-			.addText(text => text
-				.setPlaceholder("AI Chats")
-				.setValue(this.plugin.settings.chatHistoryFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.chatHistoryFolder = value;
-					await this.plugin.saveSettings();
-				}));
+		// ── System Prompts (collapsible) ────────────────────
+		const promptSection = this.createCollapsible(containerEl, '💬 System Prompts');
 
-		new Setting(containerEl).setName("Agentic Capabilities").setHeading();
-
-		new Setting(containerEl)
-			.setName("Enable File Modifications")
-			.setDesc("DANGEROUS: Allow the agent to edit, move, and delete files in your vault. It will prompt for permission before execution.")
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.plugin.settings.enableFileModifications)
-					.onChange(async (value) => {
-						this.plugin.settings.enableFileModifications = value;
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
-
-		if (this.plugin.settings.enableFileModifications) {
-			new Setting(containerEl)
-				.setName("Modify Exclude Folders")
-				.setDesc("Folders where the agent is strictly forbidden from modifying, moving, or deleting files. Comma separated (e.g. 'Templates, Archive').")
-				.addTextArea((text) => {
-					text
-						.setPlaceholder("Templates, Archive")
-						.setValue(this.plugin.settings.modifyExcludeFolders.join(", "))
-						.onChange(async (value) => {
-							this.plugin.settings.modifyExcludeFolders = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-							await this.plugin.saveSettings();
-						});
-					text.inputEl.setCssStyles({ width: '100%' });
-				});
-		}
-
-		new Setting(containerEl)
-			.setName("Enable Web Scraping")
-			.setDesc("Allow the agent to search the web (via DuckDuckGo) and fetch text from specific URLs.")
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.plugin.settings.enableWebScraping)
-					.onChange(async (value) => {
-						this.plugin.settings.enableWebScraping = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Agent Memory Folder")
-			.setDesc("Folder whose files are always loaded into the agent's system context as persistent memory/skills (e.g. 'Agent Memory'). Leave empty to disable.")
-			.addText(text => text
-				.setPlaceholder("Agent Memory")
-				.setValue(this.plugin.settings.memoryFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.memoryFolder = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl).setName("System prompts").setHeading();
-
-		const sidebarSetting = new Setting(containerEl)
+		const sidebarSetting = new Setting(promptSection)
 			.setName("Sidebar chat prompt")
-			.setDesc("System prompt for the sidebar chat agent.")
 			.addTextArea((text) => {
 				text.setPlaceholder("Enter system prompt")
 					.setValue(this.plugin.settings.sidebarChatPrompt)
@@ -366,14 +393,13 @@ export class AgentSettingTab extends PluginSettingTab {
 						this.plugin.settings.sidebarChatPrompt = value;
 						await this.plugin.saveSettings();
 					});
-				text.inputEl.setCssStyles({ width: '100%', minHeight: '100px', marginTop: '10px' });
+				text.inputEl.setCssStyles({ width: '100%', minHeight: '80px', marginTop: '6px' });
 				return text;
 			});
 		sidebarSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 
-		const metaSetting = new Setting(containerEl)
+		const metaSetting = new Setting(promptSection)
 			.setName("Meta-prompt template")
-			.setDesc("Fixed prompt used for writing other prompts (appears as the 4th prompt).")
 			.addTextArea((text) => {
 				text.setPlaceholder("Enter meta-prompt template")
 					.setValue(this.plugin.settings.metaPromptTemplate)
@@ -381,14 +407,13 @@ export class AgentSettingTab extends PluginSettingTab {
 						this.plugin.settings.metaPromptTemplate = value;
 						await this.plugin.saveSettings();
 					});
-				text.inputEl.setCssStyles({ width: '100%', minHeight: '60px', marginTop: '10px' });
+				text.inputEl.setCssStyles({ width: '100%', minHeight: '50px', marginTop: '6px' });
 				return text;
 			});
 		metaSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 
-		const editorRewriteSetting = new Setting(containerEl)
+		const editorRewriteSetting = new Setting(promptSection)
 			.setName("Editor rewrite prompt")
-			.setDesc("System prompt used when rewriting selected text in the editor.")
 			.addTextArea((text) => {
 				text.setPlaceholder("Enter system prompt")
 					.setValue(this.plugin.settings.editorRewritePrompt)
@@ -396,14 +421,13 @@ export class AgentSettingTab extends PluginSettingTab {
 						this.plugin.settings.editorRewritePrompt = value;
 						await this.plugin.saveSettings();
 					});
-				text.inputEl.setCssStyles({ width: '100%', minHeight: '60px', marginTop: '10px' });
+				text.inputEl.setCssStyles({ width: '100%', minHeight: '50px', marginTop: '6px' });
 				return text;
 			});
 		editorRewriteSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
 
-		const editorAutoSetting = new Setting(containerEl)
+		const editorAutoSetting = new Setting(promptSection)
 			.setName("Editor autocomplete prompt")
-			.setDesc("System prompt used when autocompleting text in the editor.")
 			.addTextArea((text) => {
 				text.setPlaceholder("Enter system prompt")
 					.setValue(this.plugin.settings.editorAutocompletePrompt)
@@ -411,7 +435,7 @@ export class AgentSettingTab extends PluginSettingTab {
 						this.plugin.settings.editorAutocompletePrompt = value;
 						await this.plugin.saveSettings();
 					});
-				text.inputEl.setCssStyles({ width: '100%', minHeight: '60px', marginTop: '10px' });
+				text.inputEl.setCssStyles({ width: '100%', minHeight: '50px', marginTop: '6px' });
 				return text;
 			});
 		editorAutoSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
