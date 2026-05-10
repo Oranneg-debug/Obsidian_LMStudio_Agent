@@ -634,60 +634,68 @@ export class ChatView extends ItemView {
 			
 			// Try embedding-based search first (BGE or other embedding model)
 			const embModelSetting = this.plugin.settings.embeddingModel;
-			console.log("[EMBED-DEBUG] embeddingModel setting:", JSON.stringify(embModelSetting));
-			console.log("[EMBED-DEBUG] Available providers:", aiProviders.providers?.map((p: {id: string, name: string}) => `${p.id} (${p.name})`));
 			if (embModelSetting) {
 				try {
 					const embParts = embModelSetting.split("::");
-					console.log("[EMBED-DEBUG] Looking for provider ID:", embParts[0], "model:", embParts[1]);
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 					const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
 					if (embProvider) {
-						console.log("[EMBED-DEBUG] Found provider:", JSON.stringify({ id: embProvider.id, name: embProvider.name, type: embProvider.type, url: embProvider.url, model: embProvider.model }));
-
-						// Direct embed test — does the model respond at all?
-						try {
-							console.log("[EMBED-DEBUG] Testing direct embed() call...");
-							// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-							const testEmbed = await aiProviders.embed({ input: ["test embedding connection"], provider: embProvider });
-							console.log("[EMBED-DEBUG] Direct embed() returned:", testEmbed?.length, "vectors, first vector length:", testEmbed?.[0]?.length);
-						} catch (testErr) {
-							console.error("[EMBED-DEBUG] Direct embed() FAILED:", testErr);
-						}
-
-						const documents = [];
-						for (const f of searchFiles.slice(0, 50)) { // limit to 50 for speed
+						// Collect documents
+						const docData: { path: string, name: string, text: string }[] = [];
+						for (const f of searchFiles.slice(0, 50)) {
 							try {
 								const dc = await this.plugin.app.vault.cachedRead(f);
-								if (dc.trim()) documents.push({ content: dc.substring(0, 1000), meta: { path: f.path, name: f.name } });
+								if (dc.trim()) docData.push({ path: f.path, name: f.name, text: dc.substring(0, 800) });
 							} catch { /* skip */ }
 						}
-						console.log(`[EMBED-DEBUG] Calling retrieve() with ${documents.length} documents`);
-						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
+
+						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 300);
+
+						// Embed query
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-						const results = await aiProviders.retrieve({
-							query: queryText,
-							documents: documents,
-							embeddingProvider: embProvider
-						});
-						console.log("[EMBED-DEBUG] retrieve() returned:", results?.length, "results");
-						if (results && results.length > 0) {
-							console.log("[EMBED-DEBUG] First result:", JSON.stringify({ score: results[0].score, content: results[0].content?.substring(0, 100), docMeta: results[0].document?.meta }));
-						}
-						if (results && Array.isArray(results) && results.length > 0) {
-							searchResults = results.map((r) => ({
-								path: r.document?.meta?.path || '',
-								filename: r.document?.meta?.name || '',
-								score: r.score || 0
-							})).filter(r => r.path);
-							usedEmbedding = true;
-							console.log(`[EMBED-DEBUG] Mapped ${searchResults.length} results with scores:`, searchResults.slice(0, 3).map(r => `${r.filename}: ${r.score}`));
+						const queryVecs = await aiProviders.embed({ input: [queryText], provider: embProvider }) as number[][];
+						const queryVec = queryVecs?.[0];
+						if (queryVec && queryVec.length > 0) {
+							// Embed documents in batches of 10
+							const allDocVecs: number[][] = [];
+							const batchSize = 10;
+							for (let i = 0; i < docData.length; i += batchSize) {
+								const batch = docData.slice(i, i + batchSize).map(d => d.text);
+								// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+								const batchVecs = await aiProviders.embed({ input: batch, provider: embProvider }) as number[][];
+								allDocVecs.push(...(batchVecs || []));
+							}
+
+							// Cosine similarity
+							const cosineSim = (a: number[], b: number[]): number => {
+								let dot = 0, magA = 0, magB = 0;
+								for (let i = 0; i < a.length; i++) {
+									dot += (a[i] ?? 0) * (b[i] ?? 0);
+									magA += (a[i] ?? 0) * (a[i] ?? 0);
+									magB += (b[i] ?? 0) * (b[i] ?? 0);
+								}
+								const denom = Math.sqrt(magA) * Math.sqrt(magB);
+								return denom === 0 ? 0 : dot / denom;
+							};
+
+							// Score each document
+							const scored = docData.map((d, idx) => ({
+								path: d.path,
+								filename: d.name,
+								score: allDocVecs[idx] ? cosineSim(queryVec, allDocVecs[idx]) : 0
+							}));
+
+							// Sort by score descending, take top 8
+							scored.sort((a, b) => b.score - a.score);
+							searchResults = scored.slice(0, 8).filter(r => r.score > 0.1); // filter low relevance
+							if (searchResults.length > 0) usedEmbedding = true;
+							console.log("[EMBED] Top results:", searchResults.map(r => `${r.filename}: ${(r.score * 100).toFixed(1)}%`));
 						}
 					} else {
-						console.warn("[EMBED-DEBUG] Provider NOT FOUND for id:", embParts[0]);
+						console.warn("[EMBED] Provider not found for id:", embParts[0]);
 					}
 				} catch (embErr) {
-					console.error("[EMBED-DEBUG] Embedding search EXCEPTION:", embErr);
+					console.warn("[EMBED] Embedding search failed, falling back to keywords:", embErr);
 				}
 			}
 
@@ -1222,22 +1230,42 @@ export class ChatView extends ItemView {
 				// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 				const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
 				if (embProvider) {
-					const documents = [];
-					for (const f of searchFiles) {
+					const docData: { path: string, name: string, text: string }[] = [];
+					for (const f of searchFiles.slice(0, 60)) {
 						try {
 							const dc = await this.plugin.app.vault.cachedRead(f);
-							if (dc.trim()) documents.push({ content: dc.substring(0, 2000), meta: { path: f.path, name: f.name } });
+							if (dc.trim()) docData.push({ path: f.path, name: f.name, text: dc.substring(0, 800) });
 						} catch { /* skip */ }
 					}
+
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-					const embResults = await aiProviders.retrieve({
-						query: content.substring(0, 2000),
-						documents, embeddingProvider: embProvider
-					});
-					if (Array.isArray(embResults)) {
-						results = embResults.map((r: { score: number, document: { meta?: { path?: string, name?: string } } }) => ({
-							name: r.document?.meta?.name || '', path: r.document?.meta?.path || '', score: r.score
-						})).filter(r => r.path);
+					const queryVecs = await aiProviders.embed({ input: [content.substring(0, 800)], provider: embProvider }) as number[][];
+					const queryVec = queryVecs?.[0];
+					if (queryVec && queryVec.length > 0) {
+						const allDocVecs: number[][] = [];
+						const batchSize = 10;
+						for (let i = 0; i < docData.length; i += batchSize) {
+							const batch = docData.slice(i, i + batchSize).map(d => d.text);
+							// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+							const batchVecs = await aiProviders.embed({ input: batch, provider: embProvider }) as number[][];
+							allDocVecs.push(...(batchVecs || []));
+						}
+						const cosineSim = (a: number[], b: number[]): number => {
+							let dot = 0, magA = 0, magB = 0;
+							for (let i = 0; i < a.length; i++) {
+								dot += (a[i] ?? 0) * (b[i] ?? 0);
+								magA += (a[i] ?? 0) * (a[i] ?? 0);
+								magB += (b[i] ?? 0) * (b[i] ?? 0);
+							}
+							const denom = Math.sqrt(magA) * Math.sqrt(magB);
+							return denom === 0 ? 0 : dot / denom;
+						};
+						const scored = docData.map((d, idx) => ({
+							name: d.name, path: d.path,
+							score: allDocVecs[idx] ? cosineSim(queryVec, allDocVecs[idx]) : 0
+						}));
+						scored.sort((a, b) => b.score - a.score);
+						results = scored.slice(0, 10).filter(r => r.score > 0.1);
 					}
 				}
 			}
