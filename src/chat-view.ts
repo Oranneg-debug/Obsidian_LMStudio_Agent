@@ -357,6 +357,14 @@ export class ChatView extends ItemView {
 			optionsContainer.setCssStyles({ display: isHidden ? 'flex' : 'none' });
 		});
 
+		// Model selector
+		this.modelSelectorEl = leftControls.createEl('select');
+		this.modelSelectorEl.setCssStyles({
+			backgroundColor: 'transparent', border: 'none', boxShadow: 'none',
+			color: 'var(--text-muted)', fontSize: '0.75em', maxWidth: '150px', cursor: 'pointer'
+		});
+		void this.populateModelSelector();
+
 		const rightControls = bottomRow.createDiv();
 		rightControls.setCssStyles({ display: 'flex', gap: '5px', alignItems: 'center' });
 
@@ -476,6 +484,33 @@ export class ChatView extends ItemView {
 		}
 	}
 
+	async populateModelSelector() {
+		try {
+			const aiResolver = await waitForAI();
+			const aiProviders = await aiResolver.promise;
+			this.modelSelectorEl.empty();
+
+			const defaultOpt = this.modelSelectorEl.createEl('option', { text: 'Default Model', value: '' });
+			defaultOpt.value = '';
+
+			if (aiProviders.providers) {
+				for (const provider of aiProviders.providers) {
+					if (provider.availableModels && provider.availableModels.length > 0) {
+						for (const model of provider.availableModels) {
+							const opt = this.modelSelectorEl.createEl('option', { text: `${model}` });
+							opt.value = `${provider.id}::${model}`;
+							if (opt.value === this.plugin.settings.chatModel) opt.selected = true;
+						}
+					} else {
+						const opt = this.modelSelectorEl.createEl('option', { text: `${provider.name}` });
+						opt.value = `${provider.id}::${provider.model || 'default'}`;
+						if (opt.value === this.plugin.settings.chatModel) opt.selected = true;
+					}
+				}
+			}
+		} catch { /* providers not ready yet */ }
+	}
+
 	renderActiveContextRibbon() {
 		this.activeContextContainer.empty();
 		this.activeContextFiles.forEach((ctx, idx) => {
@@ -589,23 +624,57 @@ export class ChatView extends ItemView {
 
 			const searchFiles = this.plugin.app.vault.getFiles().filter(f => (f.extension === 'md' || f.extension === 'canvas') && f.path !== file.path);
 			
-			const searchResults = [];
-			for (const f of searchFiles) {
+			let searchResults: { path: string, filename: string, score: number }[] = [];
+			
+			// Try embedding-based search first (BGE or other embedding model)
+			const embModelSetting = this.plugin.settings.embeddingModel;
+			if (embModelSetting) {
 				try {
-					const docContent = await this.plugin.app.vault.cachedRead(f);
-					const docLower = docContent.toLowerCase();
-					let score = 0;
-					
-					for (const kw of extractedKeywords) {
-						if (kw && docLower.includes(kw.toLowerCase())) {
-							score += 1;
+					const embParts = embModelSetting.split("::");
+					const embProvider = aiProviders.providers.find((p: { id: string }) => p.id === embParts[0]);
+					if (embProvider) {
+						const documents = [];
+						for (const f of searchFiles) {
+							try {
+								const dc = await this.plugin.app.vault.cachedRead(f);
+								if (dc.trim()) documents.push({ content: dc.substring(0, 2000), meta: { path: f.path, name: f.name } });
+							} catch { /* skip */ }
+						}
+						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
+						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+						const results = await aiProviders.retrieve({
+							query: queryText,
+							documents: documents,
+							embeddingProvider: embProvider,
+							topK: 8
+						});
+						if (results && Array.isArray(results)) {
+							// eslint-disable-next-line @typescript-eslint/no-explicit-any
+							searchResults = results.map((r: any) => ({
+								path: r.meta?.path || '',
+								filename: r.meta?.name || '',
+								score: r.score || 0
+							}));
 						}
 					}
-					
-					if (score > 0) {
-						searchResults.push({ path: f.path, filename: f.name, score });
-					}
-				} catch { /* ignore */ }
+				} catch (embErr) {
+					console.warn("Embedding search failed, falling back to keywords:", embErr);
+				}
+			}
+
+			// Fallback to keyword matching if embedding didn't work
+			if (searchResults.length === 0) {
+				for (const f of searchFiles) {
+					try {
+						const docContent = await this.plugin.app.vault.cachedRead(f);
+						const docLower = docContent.toLowerCase();
+						let score = 0;
+						for (const kw of extractedKeywords) {
+							if (kw && docLower.includes(kw.toLowerCase())) score += 1;
+						}
+						if (score > 0) searchResults.push({ path: f.path, filename: f.name, score });
+					} catch { /* ignore */ }
+				}
 			}
 
 			searchResults.sort((a, b) => b.score - a.score);
@@ -1173,7 +1242,8 @@ export class ChatView extends ItemView {
 				return;
 			}
 			
-			const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, this.plugin.settings.chatModel);
+			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, selectedModel);
 			if (!chatProvider) return;
 
 			let tools: IAIToolDefinition[] | undefined = [
@@ -1195,7 +1265,7 @@ export class ChatView extends ItemView {
 					type: "function",
 					function: {
 						name: "create_file",
-						description: "Creates a new markdown file in the vault with the specified content.",
+						description: "Creates a new markdown file in the vault. ALWAYS start the content with YAML frontmatter (---\ntitle: ...\ntags: [...]\ndate: YYYY-MM-DD\n---) followed by the markdown body.",
 						parameters: {
 							type: "object",
 							properties: {
@@ -1334,6 +1404,23 @@ export class ChatView extends ItemView {
 				);
 			}
 
+			if (this.plugin.settings.enableWebScraping) {
+				tools.push({
+					type: "function",
+					function: {
+						name: "summarize_youtube",
+						description: "Fetches and returns the transcript/captions of a YouTube video for summarization. Provide the full YouTube URL.",
+						parameters: {
+							type: "object",
+							properties: {
+								url: { type: "string", description: "The full YouTube video URL" }
+							},
+							required: ["url"]
+						}
+					}
+				});
+			}
+
 			let currentHistory = [...this.history];
 			
 			// Inject the system prompt at the beginning of the history for this execution
@@ -1458,7 +1545,39 @@ export class ChatView extends ItemView {
 									searchOutput += `Snippet: ${resultNodes[i]?.textContent?.trim() || ''}\n\n`;
 								}
 								toolResult = searchOutput || "No results found.";
-							} else if (toolCall.function.name === 'list_files') {
+							} else if (toolCall.function.name === 'summarize_youtube') {
+							const urlStr = String(args.url);
+							let videoId = '';
+							const idMatch = urlStr.match(/(?:v=|youtu\.be\/|\/embed\/|\/v\/)([a-zA-Z0-9_-]{11})/);
+							if (idMatch) videoId = idMatch[1] || '';
+							if (!videoId) {
+								toolResult = "Error: Could not extract YouTube video ID from URL.";
+							} else {
+								try {
+									const pageRes = await requestUrl({ url: `https://www.youtube.com/watch?v=${videoId}` });
+									const pageText = pageRes.text;
+									const titleMatch = pageText.match(/<title>(.*?)<\/title>/);
+									const title = titleMatch ? titleMatch[1]?.replace(' - YouTube', '') : 'Unknown';
+									const captionMatch = pageText.match(/"captionTracks":\[.*?"baseUrl":"(.*?)"/);
+									if (captionMatch && captionMatch[1]) {
+										const captionUrl = captionMatch[1].replace(/\\u0026/g, '&');
+										const captionRes = await requestUrl({ url: captionUrl });
+										const ytParser = new DOMParser();
+										const xmlDoc = ytParser.parseFromString(captionRes.text, 'text/xml');
+										const texts = xmlDoc.querySelectorAll('text');
+										let transcript = '';
+										texts.forEach(t => { transcript += (t.textContent || '') + ' '; });
+										toolResult = `Title: ${title}\n\nTranscript:\n${transcript.substring(0, 12000)}`;
+									} else {
+										const descMatch = pageText.match(/"shortDescription":"(.*?)"/);
+										const desc = descMatch ? descMatch[1]?.replace(/\\n/g, '\n') : '';
+										toolResult = `Title: ${title}\n\nNo captions available. Description:\n${desc?.substring(0, 3000) || 'No description.'}`;
+									}
+								} catch (ytErr) {
+									toolResult = `Error fetching YouTube data: ${ytErr instanceof Error ? ytErr.message : String(ytErr)}`;
+								}
+							}
+						} else if (toolCall.function.name === 'list_files') {
 								const files = this.plugin.app.vault.getMarkdownFiles();
 								toolResult = files.map(f => f.path).join("\n");
 							} else if (toolCall.function.name === 'search_vault') {
