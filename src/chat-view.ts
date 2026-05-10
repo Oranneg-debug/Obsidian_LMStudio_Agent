@@ -651,11 +651,10 @@ export class ChatView extends ItemView {
 						console.log(`Embedding search: ${documents.length} documents, query: "${extractedKeywords.join(' ').substring(0, 80)}..."`);
 						const queryText = extractedKeywords.join(' ') + ' ' + content.substring(0, 500);
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-							const results = await aiProviders.retrieve({
+						const results = await aiProviders.retrieve({
 							query: queryText,
 							documents: documents,
-							embeddingProvider: embProvider,
-							topK: 8
+							embeddingProvider: embProvider
 						});
 						console.log("Embedding raw results:", results);
 						if (results && Array.isArray(results) && results.length > 0) {
@@ -1110,9 +1109,10 @@ export class ChatView extends ItemView {
 			});
 
 			let respStr = typeof resp === 'string' ? resp : '';
-			if (resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
+			if (!respStr && resp && typeof resp === 'object' && Symbol.asyncIterator in resp) {
 				for await (const chunk of resp) respStr += chunk || '';
 			}
+			console.log('Auto-tag raw response:', respStr);
 
 			const parsed = JSON.parse(respStr.replace(/```json/g, '').replace(/```/g, '').trim()) as string[];
 			if (!Array.isArray(parsed)) throw new Error("Not an array");
@@ -1158,18 +1158,7 @@ export class ChatView extends ItemView {
 
 	// ── TOOL: Templates ───────────────────────────────────
 	async toolTemplates(anchorBtn: HTMLElement) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const internalPlugins = (this.plugin.app as any).internalPlugins;
-		let templateFolder = 'Templates';
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-			const templatePlugin = internalPlugins?.getPluginById?.('templates');
-			if (templatePlugin?.instance?.options?.folder) {
-				// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-				templateFolder = templatePlugin.instance.options.folder;
-			}
-		} catch { /* fallback */ }
-
+		const templateFolder = this.plugin.settings.templateFolder?.trim() || 'Templates';
 		const templateFiles = this.plugin.app.vault.getFiles().filter(f => f.extension === 'md' && f.path.startsWith(templateFolder));
 
 		if (templateFiles.length === 0) {
@@ -1226,7 +1215,7 @@ export class ChatView extends ItemView {
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
 					const embResults = await aiProviders.retrieve({
 						query: content.substring(0, 2000),
-						documents, embeddingProvider: embProvider, topK: 10
+						documents, embeddingProvider: embProvider
 					});
 					if (Array.isArray(embResults)) {
 						results = embResults.map((r: { score: number, document: { meta?: { path?: string, name?: string } } }) => ({

@@ -28,6 +28,7 @@ export interface AgentPluginSettings {
 	comfyUIUrl: string;
 	comfyUIWorkflow: string;
 	autoAnalyzeOnStartup: boolean;
+	templateFolder: string;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -49,7 +50,8 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	memoryFolder: "",
 	comfyUIUrl: "http://127.0.0.1:8188",
 	comfyUIWorkflow: "",
-	autoAnalyzeOnStartup: false
+	autoAnalyzeOnStartup: false,
+	templateFolder: "Templates"
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -325,6 +327,17 @@ export class AgentSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.chatHistoryFolder)
 				.onChange(async (value) => {
 					this.plugin.settings.chatHistoryFolder = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Template folder")
+			.setDesc("Folder containing your note templates.")
+			.addText(text => text
+				.setPlaceholder("Templates")
+				.setValue(this.plugin.settings.templateFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.templateFolder = value;
 					await this.plugin.saveSettings();
 				}));
 
