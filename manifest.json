@@ -3,9 +3,9 @@
 	"name": "LMStudio Agent",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Agentic capabilities for Obsidian powered by local LLMs via LMStudio and obsidian-ai-providers.",
+	"description": "Fully agentic AI assistant for Obsidian — chat, semantic search, auto-tag, templates, web browsing, file management, and more. Powered by local LLMs via AI Providers.",
 	"author": "Antigravity",
-	"authorUrl": "",
+	"authorUrl": "https://github.com/Oranneg-debug",
 	"fundingUrl": "",
 	"isDesktopOnly": false
 }
