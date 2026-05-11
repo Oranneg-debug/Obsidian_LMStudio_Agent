@@ -33,6 +33,7 @@ export interface AgentPluginSettings {
 	cogDesignPrompt: string;
 	cogTechPrompt: string;
 	cogBoardroomPrompt: string;
+	cogOutputFolder: string;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -59,7 +60,8 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	cognitiveOSUrl: "http://127.0.0.1:5000/process",
 	cogDesignPrompt: "/design\n",
 	cogTechPrompt: "/technical\n",
-	cogBoardroomPrompt: "/boardroom\n"
+	cogBoardroomPrompt: "/boardroom\n",
+	cogOutputFolder: "/",
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -401,6 +403,17 @@ export class AgentSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.cognitiveOSUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.cognitiveOSUrl = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Output Folder")
+			.setDesc("The folder inside your vault where Cognitive OS documents will be saved (e.g. 'AI Notes' or '/' for root).")
+			.addText(text => text
+				.setPlaceholder("/")
+				.setValue(this.plugin.settings.cogOutputFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.cogOutputFolder = value;
 					await this.plugin.saveSettings();
 				}));
 

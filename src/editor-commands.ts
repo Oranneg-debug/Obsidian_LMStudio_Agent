@@ -99,16 +99,68 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 		}
 	});
 
-	const sendToCogOS = (selection: string, prefix: string) => {
+	const sendToCogOS = async (selection: string, prefix: string, sourceFile: any) => {
 		new Notice('🧠 Sending to Cognitive OS... Check your vault in a few minutes!');
-		fetch(plugin.settings.cognitiveOSUrl || 'http://127.0.0.1:5000/process', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ prompt: prefix + selection })
-		}).catch(e => {
+		try {
+			const res = await fetch(plugin.settings.cognitiveOSUrl || 'http://127.0.0.1:5000/process', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ prompt: prefix + selection })
+			});
+			const data = await res.json();
+			
+			// Format markdown
+			let content = `---
+title: "Cognitive OS Output"
+date: ${new Date().toISOString().split('T')[0]}
+tags: [ai-council, ${data.pattern?.toLowerCase().replace(/_/g, '-')}]
+task_id: ${data.task_id}
+---\n\n`;
+
+			content += `# Original Highlight\n`;
+			if (sourceFile && sourceFile.basename) {
+				content += `Source: [[${sourceFile.basename}]]\n\n`;
+			}
+			content += `> ${selection.split('\n').join('\n> ')}\n\n`;
+
+			content += `# Final Synthesis\n${data.response}\n\n`;
+			
+			if (data.opinions && data.opinions.length > 0) {
+				content += `---\n# 🧠 Council Reasoning\n\n`;
+				data.opinions.forEach((op: any) => {
+					content += `### ${op.role.toUpperCase()} (${op.model_name})\n${op.opinion}\n\n`;
+				});
+			}
+
+			if (data.oversight) {
+				content += `### OVERSEER ANALYSIS\n${data.oversight}\n\n`;
+			}
+
+			// Generate filename
+			const safeSelection = selection.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30).trim() || 'Council_Output';
+			const timestamp = new Date().getTime();
+			const filename = `${safeSelection}_${timestamp}.md`;
+			
+			let outputFolder = plugin.settings.cogOutputFolder;
+			if (outputFolder === "/" || !outputFolder) {
+				outputFolder = "";
+			} else if (!outputFolder.endsWith('/')) {
+				outputFolder += '/';
+			}
+			
+			// Create file in vault
+			const newFile = await plugin.app.vault.create(`${outputFolder}${filename}`, content);
+			
+			// Open in new tab
+			const leaf = plugin.app.workspace.getLeaf('tab');
+			await leaf.openFile(newFile);
+			
+			new Notice('✅ Cognitive OS process complete! Note created.');
+			
+		} catch(e) {
 			console.error("Cognitive OS Error:", e);
 			new Notice('❌ Failed to reach Cognitive OS. Is the FastAPI server running on port 5000?');
-		});
+		}
 	};
 
 	plugin.addCommand({
@@ -120,7 +172,7 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 				new Notice('Please select some text.');
 				return;
 			}
-			sendToCogOS(selection, "");
+			sendToCogOS(selection, "", view.file);
 		}
 	});
 
@@ -133,7 +185,7 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 				new Notice('Please select some text.');
 				return;
 			}
-			sendToCogOS(selection, plugin.settings.cogDesignPrompt);
+			sendToCogOS(selection, plugin.settings.cogDesignPrompt, view.file);
 		}
 	});
 
@@ -146,7 +198,7 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 				new Notice('Please select some text.');
 				return;
 			}
-			sendToCogOS(selection, plugin.settings.cogTechPrompt);
+			sendToCogOS(selection, plugin.settings.cogTechPrompt, view.file);
 		}
 	});
 
@@ -159,7 +211,7 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 				new Notice('Please select some text.');
 				return;
 			}
-			sendToCogOS(selection, plugin.settings.cogBoardroomPrompt);
+			sendToCogOS(selection, plugin.settings.cogBoardroomPrompt, view.file);
 		}
 	});
 }
