@@ -117,11 +117,9 @@ tags: [ai-council, ${data.pattern?.toLowerCase().replace(/_/g, '-')}]
 task_id: ${data.task_id}
 ---\n\n`;
 
-			content += `# Original Highlight\n`;
 			if (sourceFile && sourceFile.basename) {
 				content += `Source: [[${sourceFile.basename}]]\n\n`;
 			}
-			content += `> ${selection.split('\n').join('\n> ')}\n\n`;
 
 			content += `# Final Synthesis\n${data.response}\n\n`;
 			
