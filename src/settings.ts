@@ -395,8 +395,9 @@ export class AgentSettingTab extends PluginSettingTab {
 
 		new Setting(cogSection)
 			.setName("API Endpoint")
-			.setDesc("Local FastAPI URL for Cognitive OS orchestrator.")
+			.setDesc("Local FastAPI URL for Cognitive OS orchestrator (e.g. http://127.0.0.1:5000/process).")
 			.addText(text => text
+				.setPlaceholder("http://127.0.0.1:5000/process")
 				.setValue(this.plugin.settings.cognitiveOSUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.cognitiveOSUrl = value;

@@ -207,7 +207,7 @@ This plugin acts as the native front-end for your **Cognitive OS** local orchest
 
 ### Setup
 
-1. Make sure your Python Cognitive OS backend is running (`python src/api.py` or `start_services.bat`) on its default port `5000`.
+1. Make sure your Python Cognitive OS backend is running (`python -m src.api` or `start_services.bat`) on its default port `5000`.
 2. Open the Obsidian plugin settings → **🧠 Cognitive OS**.
 3. Verify the **API Endpoint** is set to `http://127.0.0.1:5000/process`.
 
