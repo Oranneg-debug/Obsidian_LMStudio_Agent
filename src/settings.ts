@@ -29,6 +29,10 @@ export interface AgentPluginSettings {
 	comfyUIWorkflow: string;
 	autoAnalyzeOnStartup: boolean;
 	templateFolder: string;
+	cognitiveOSUrl: string;
+	cogDesignPrompt: string;
+	cogTechPrompt: string;
+	cogBoardroomPrompt: string;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -51,7 +55,11 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	comfyUIUrl: "http://127.0.0.1:8188",
 	comfyUIWorkflow: "",
 	autoAnalyzeOnStartup: false,
-	templateFolder: "Templates"
+	templateFolder: "Templates",
+	cognitiveOSUrl: "http://127.0.0.1:5000/process",
+	cogDesignPrompt: "/design\n",
+	cogTechPrompt: "/technical\n",
+	cogBoardroomPrompt: "/boardroom\n"
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -264,10 +272,10 @@ export class AgentSettingTab extends PluginSettingTab {
 				);
 		});
 
-		// ── Agentic Capabilities ────────────────────────────
-		new Setting(containerEl).setName("Agent Capabilities").setHeading();
+		// ── Agentic Capabilities (collapsible) ────────────────────────────
+		const agentSection = this.createCollapsible(containerEl, '🤖 Agent Capabilities');
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Enable file modifications")
 			.setDesc("Allow the agent to edit, move, and delete files. Requires permission per action.")
 			.addToggle((toggle) => {
@@ -281,7 +289,7 @@ export class AgentSettingTab extends PluginSettingTab {
 			});
 
 		if (this.plugin.settings.enableFileModifications) {
-			new Setting(containerEl)
+			new Setting(agentSection)
 				.setName("Modification exclude folders")
 				.setDesc("Folders the agent cannot modify. Comma-separated.")
 				.addTextArea((text) => {
@@ -296,7 +304,7 @@ export class AgentSettingTab extends PluginSettingTab {
 				});
 		}
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Enable web scraping & YouTube")
 			.setDesc("Allow web search (DuckDuckGo), URL fetching, and YouTube transcript summarization.")
 			.addToggle((toggle) => {
@@ -308,7 +316,7 @@ export class AgentSettingTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Agent memory folder")
 			.setDesc("Files in this folder are always injected into the agent's context.")
 			.addText(text => text
@@ -319,7 +327,7 @@ export class AgentSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Chat history folder")
 			.setDesc("Where saved chats are stored.")
 			.addText(text => text
@@ -330,7 +338,7 @@ export class AgentSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Template folder")
 			.setDesc("Folder containing your note templates.")
 			.addText(text => text
@@ -341,7 +349,7 @@ export class AgentSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(agentSection)
 			.setName("Auto-analyze vault on startup")
 			.setDesc("Automatically run vault analysis when Obsidian starts (saves to memory folder).")
 			.addToggle(toggle => {
@@ -381,6 +389,53 @@ export class AgentSettingTab extends PluginSettingTab {
 			return text;
 		});
 		comfyWorkflowSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
+
+		// ── Cognitive OS (collapsible) ───────────────────────────
+		const cogSection = this.createCollapsible(containerEl, '🧠 Cognitive OS');
+
+		new Setting(cogSection)
+			.setName("API Endpoint")
+			.setDesc("Local FastAPI URL for Cognitive OS orchestrator.")
+			.addText(text => text
+				.setValue(this.plugin.settings.cognitiveOSUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.cognitiveOSUrl = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Note")
+			.setDesc("The actual system prompts and models for the councils need to be set directly in the Python orchestrator script (orchestrator.py). These prefixes below just automatically route your selected text to the correct council.");
+
+		new Setting(cogSection)
+			.setName("Design Council Prompt")
+			.setDesc("Text injected before your selection for the Creative Council.")
+			.addText(text => text
+				.setValue(this.plugin.settings.cogDesignPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.cogDesignPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Technical Council Prompt")
+			.setDesc("Text injected before your selection for the Technical Council.")
+			.addText(text => text
+				.setValue(this.plugin.settings.cogTechPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.cogTechPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Boardroom Prompt")
+			.setDesc("Text injected before your selection for the Full Boardroom.")
+			.addText(text => text
+				.setValue(this.plugin.settings.cogBoardroomPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.cogBoardroomPrompt = value;
+					await this.plugin.saveSettings();
+				}));
 
 		// ── Editor Commands (collapsible) ───────────────────
 		const cmdSection = this.createCollapsible(containerEl, '⌨️ Editor Commands');

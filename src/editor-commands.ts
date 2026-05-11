@@ -98,6 +98,70 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 			}
 		}
 	});
+
+	const sendToCogOS = (selection: string, prefix: string) => {
+		new Notice('🧠 Sending to Cognitive OS... Check your vault in a few minutes!');
+		fetch(plugin.settings.cognitiveOSUrl || 'http://127.0.0.1:5000/process', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ prompt: prefix + selection })
+		}).catch(e => {
+			console.error("Cognitive OS Error:", e);
+			new Notice('❌ Failed to reach Cognitive OS. Is the FastAPI server running on port 5000?');
+		});
+	};
+
+	plugin.addCommand({
+		id: 'agent-consult-cognitive-os-auto',
+		name: 'Cognitive OS: Auto-Route Council',
+		editorCallback: async (editor: Editor, view: MarkdownView) => {
+			const selection = editor.getSelection();
+			if (!selection) {
+				new Notice('Please select some text.');
+				return;
+			}
+			sendToCogOS(selection, "");
+		}
+	});
+
+	plugin.addCommand({
+		id: 'agent-consult-cognitive-os-design',
+		name: 'Cognitive OS: Design Council',
+		editorCallback: async (editor: Editor, view: MarkdownView) => {
+			const selection = editor.getSelection();
+			if (!selection) {
+				new Notice('Please select some text.');
+				return;
+			}
+			sendToCogOS(selection, plugin.settings.cogDesignPrompt);
+		}
+	});
+
+	plugin.addCommand({
+		id: 'agent-consult-cognitive-os-tech',
+		name: 'Cognitive OS: Technical Council',
+		editorCallback: async (editor: Editor, view: MarkdownView) => {
+			const selection = editor.getSelection();
+			if (!selection) {
+				new Notice('Please select some text.');
+				return;
+			}
+			sendToCogOS(selection, plugin.settings.cogTechPrompt);
+		}
+	});
+
+	plugin.addCommand({
+		id: 'agent-consult-cognitive-os-boardroom',
+		name: 'Cognitive OS: Boardroom',
+		editorCallback: async (editor: Editor, view: MarkdownView) => {
+			const selection = editor.getSelection();
+			if (!selection) {
+				new Notice('Please select some text.');
+				return;
+			}
+			sendToCogOS(selection, plugin.settings.cogBoardroomPrompt);
+		}
+	});
 }
 
 export function registerCustomCommands(plugin: ObsidianAgentPlugin) {

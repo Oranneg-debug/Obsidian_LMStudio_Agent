@@ -201,6 +201,31 @@ Every modification triggers a **real-time approval prompt** in the chat:
 
 ---
 
+## 🧠 Cognitive OS Integration
+
+This plugin acts as the native front-end for your **Cognitive OS** local orchestrator.
+
+### Setup
+
+1. Make sure your Python Cognitive OS backend is running (`python src/api.py` or `start_services.bat`) on its default port `5000`.
+2. Open the Obsidian plugin settings → **🧠 Cognitive OS**.
+3. Verify the **API Endpoint** is set to `http://127.0.0.1:5000/process`.
+
+### How to Use
+
+Highlight text in any note, open the Command Palette (`Ctrl/Cmd + P`), and search for `Cognitive OS`:
+
+| Command | Description |
+|---|---|
+| **Auto-Route Council** | Sends text as-is. The Python Sentry Router determines the best council path. |
+| **Design Council** | Prepend `/design` to force the request to the Creative Council. |
+| **Technical Council** | Prepend `/technical` to force the request to the Small/Tech Council. |
+| **Boardroom** | Prepend `/boardroom` to force the request through the full 6-model sequential boardroom. |
+
+*Note: The actual system prompts, temperatures, and model assignments for the councils are configured entirely within your `orchestrator.py` script.*
+
+---
+
 ## ✏️ Editor Commands
 
 Available via the Obsidian command palette (Ctrl/Cmd + P):
