@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice } from 'obsidian';
+import { Editor, MarkdownView, Notice, TFile } from 'obsidian';
 import ObsidianAgentPlugin from './main';
 import { waitForAI, IAIProvidersService, IAIProvider } from '@obsidian-ai-providers/sdk';
 
@@ -40,9 +40,16 @@ export async function executeEditorCommand(
 				{ role: "system", content: systemPrompt },
 				{ role: "user", content: userPrompt }
 			],
+			abortController: new AbortController()
 		});
 
-		return result;
+		if (result && typeof result === 'string') {
+			return result;
+		} else if (result) {
+			return JSON.stringify(result, null, 2);
+		}
+		
+		return null;
 	} catch (error) {
 		console.error(error);
 		new Notice('Failed to execute command.');
@@ -109,51 +116,18 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 			});
 			const data = await res.json();
 			
-			// Format markdown
-			let content = `---
-title: "Cognitive OS Output"
-date: ${new Date().toISOString().split('T')[0]}
-tags: [ai-council, ${data.pattern?.toLowerCase().replace(/_/g, '-')}]
-task_id: ${data.task_id}
----\n\n`;
-
-			if (sourceFile && sourceFile.basename) {
-				content += `Source: [[${sourceFile.basename}]]\n\n`;
+			if (data.relative_path) {
+				const file = plugin.app.vault.getAbstractFileByPath(data.relative_path);
+				if (file instanceof TFile) {
+					const leaf = plugin.app.workspace.getLeaf('tab');
+					await leaf.openFile(file);
+					new Notice('✅ Cognitive OS process complete! Note opened.');
+				} else {
+					new Notice('✅ Cognitive OS process complete! File saved, but could not auto-open (path mismatch).');
+				}
+			} else {
+				new Notice('✅ Cognitive OS process complete!');
 			}
-
-			content += `# Final Synthesis\n${data.response}\n\n`;
-			
-			if (data.opinions && data.opinions.length > 0) {
-				content += `---\n# 🧠 Council Reasoning\n\n`;
-				data.opinions.forEach((op: any) => {
-					content += `### ${op.role.toUpperCase()} (${op.model_name})\n${op.opinion}\n\n`;
-				});
-			}
-
-			if (data.oversight) {
-				content += `### OVERSEER ANALYSIS\n${data.oversight}\n\n`;
-			}
-
-			// Generate filename
-			const safeSelection = selection.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30).trim() || 'Council_Output';
-			const timestamp = new Date().getTime();
-			const filename = `${safeSelection}_${timestamp}.md`;
-			
-			let outputFolder = plugin.settings.cogOutputFolder;
-			if (outputFolder === "/" || !outputFolder) {
-				outputFolder = "";
-			} else if (!outputFolder.endsWith('/')) {
-				outputFolder += '/';
-			}
-			
-			// Create file in vault
-			const newFile = await plugin.app.vault.create(`${outputFolder}${filename}`, content);
-			
-			// Open in new tab
-			const leaf = plugin.app.workspace.getLeaf('tab');
-			await leaf.openFile(newFile);
-			
-			new Notice('✅ Cognitive OS process complete! Note created.');
 			
 		} catch(e) {
 			console.error("Cognitive OS Error:", e);

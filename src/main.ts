@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, AgentPluginSettings, AgentSettingTab } from "./settin
 import { initAI } from '@obsidian-ai-providers/sdk';
 import { registerEditorCommands, registerCustomCommands } from './editor-commands';
 import { ChatView, CHAT_VIEW_TYPE } from './chat-view';
+import { processCanvasNode } from './canvas-commands';
 import '@obsidian-ai-providers/sdk/styles.css';
 
 export default class ObsidianAgentPlugin extends Plugin {
@@ -19,6 +20,77 @@ export default class ObsidianAgentPlugin extends Plugin {
 		// Register AI commands immediately so they show up in the UI
 		registerEditorCommands(this);
 		registerCustomCommands(this);
+
+		// Register Canvas Node Toolbar button
+		this.registerEvent((this.app.workspace as any).on('canvas:node-menu', (menu: any, node: any) => {
+			menu.addSeparator();
+			menu.addItem((item: any) => {
+				item.setTitle('Process with Boardroom (#boardroom)')
+					.setIcon('bot')
+					.onClick(() => {
+						const view = this.app.workspace.getActiveViewOfType(require('obsidian').ItemView);
+						if (view && view.getViewType() === 'canvas') {
+							// @ts-ignore
+							processCanvasNode(this, view.canvas, node, '#boardroom');
+						}
+					});
+			});
+			menu.addItem((item: any) => {
+				item.setTitle('Process with Technical Council (#technical)')
+					.setIcon('bot')
+					.onClick(() => {
+						const view = this.app.workspace.getActiveViewOfType(require('obsidian').ItemView);
+						if (view && view.getViewType() === 'canvas') {
+							// @ts-ignore
+							processCanvasNode(this, view.canvas, node, '#technical');
+						}
+					});
+			});
+			menu.addItem((item: any) => {
+				item.setTitle('Process with Design Council (#design)')
+					.setIcon('bot')
+					.onClick(() => {
+						const view = this.app.workspace.getActiveViewOfType(require('obsidian').ItemView);
+						if (view && view.getViewType() === 'canvas') {
+							// @ts-ignore
+							processCanvasNode(this, view.canvas, node, '#design');
+						}
+					});
+			});
+			menu.addItem((item: any) => {
+				item.setTitle('Image Description Only (#vision)')
+					.setIcon('image')
+					.onClick(() => {
+						const view = this.app.workspace.getActiveViewOfType(require('obsidian').ItemView);
+						if (view && view.getViewType() === 'canvas') {
+							// @ts-ignore
+							processCanvasNode(this, view.canvas, node, '#vision');
+						}
+					});
+			});
+		}));
+
+		this.addCommand({
+			id: 'canvas-process-node',
+			name: 'Canvas: Process connected nodes with AI',
+			checkCallback: (checking: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(require('obsidian').ItemView);
+				if (view && view.getViewType() === 'canvas') {
+					if (!checking) {
+						// @ts-ignore
+						const selection = Array.from(view.canvas.selection);
+						if (selection.length === 1) {
+							// @ts-ignore
+							processCanvasNode(this, view.canvas, selection[0]);
+						} else {
+							new Notice("Please select exactly one prompt node.");
+						}
+					}
+					return true;
+				}
+				return false;
+			}
+		});
 
 		this.addRibbonIcon('bot', 'Open agent chat', () => {
 			void this.activateChatView();
