@@ -8,6 +8,15 @@ export interface AgentCustomCommand {
 	prompt: string;
 }
 
+export interface AgentModelPreset {
+	id: string;
+	name: string;
+	model: string;
+	temperature: number;
+	contextWindow: number;
+	gpuLayers: number;
+}
+
 export interface AgentPluginSettings {
 	sidebarChatPrompt: string;
 	editorRewritePrompt: string;
@@ -34,6 +43,16 @@ export interface AgentPluginSettings {
 	cogTechPrompt: string;
 	cogBoardroomPrompt: string;
 	cogOutputFolder: string;
+	autoAddContext: boolean;
+	internetAccess: boolean;
+	closeChatOnBoardroom: boolean;
+	globalCompassWeight: string;
+	modelPresets: AgentModelPreset[];
+	toolAnalyzeVaultModel: string;
+	toolSummarizeNoteModel: string;
+	toolAISuggestionsModel: string;
+	toolHelpPromptModel: string;
+	toolTemplatesModel: string;
 }
 
 export const DEFAULT_SETTINGS: AgentPluginSettings = {
@@ -62,6 +81,19 @@ export const DEFAULT_SETTINGS: AgentPluginSettings = {
 	cogTechPrompt: "/technical\n",
 	cogBoardroomPrompt: "/boardroom\n",
 	cogOutputFolder: "/",
+	autoAddContext: false,
+	internetAccess: false,
+	closeChatOnBoardroom: true,
+	globalCompassWeight: "DEFAULT",
+	toolAnalyzeVaultModel: "",
+	toolSummarizeNoteModel: "",
+	toolAISuggestionsModel: "",
+	toolHelpPromptModel: "",
+	toolTemplatesModel: "",
+	modelPresets: [
+		{ id: 'qwen3-high-perf', name: 'Qwen3 High-Perf (262k)', model: 'qwen3-coder-next', temperature: 0.1, contextWindow: 262144, gpuLayers: 44 },
+		{ id: 'scribe-lite', name: 'Scribe (Ministral)', model: 'ministral-3-3b-instruct-2512', temperature: 0.7, contextWindow: 32768, gpuLayers: -1 }
+	]
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -451,6 +483,123 @@ export class AgentSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(cogSection)
+			.setName("Auto-add active note to context")
+			.setDesc("Automatically add the current note to the chat context when opening.")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoAddContext)
+				.onChange(async (value) => {
+					this.plugin.settings.autoAddContext = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Close chatbox during Boardroom")
+			.setDesc("Automatically close the sidebar chat when a boardroom meeting starts to maximize VRAM.")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.closeChatOnBoardroom)
+				.onChange(async (value) => {
+					this.plugin.settings.closeChatOnBoardroom = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Enable Internet Access by default")
+			.setDesc("Whether the internet search toggle in the chatbox is on by default.")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.internetAccess)
+				.onChange(async (value) => {
+					this.plugin.settings.internetAccess = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cogSection)
+			.setName("Global Compass Weight Override")
+			.setDesc("Force a specific weight for all council members. 'DEFAULT' uses the role's predefined weight.")
+			.addDropdown(dropdown => dropdown
+				.addOptions({
+					"DEFAULT": "Default (Role-Specific)",
+					"MAXIMUM": "Maximum Weight",
+					"HIGH": "High Weight",
+					"MEDIUM": "Medium Weight",
+					"LOW": "Low Weight",
+					"IGNORE": "Ignore (Disable Injection)"
+				})
+				.setValue(this.plugin.settings.globalCompassWeight)
+				.onChange(async (value) => {
+					this.plugin.settings.globalCompassWeight = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// ── Tool Models (collapsible) ───────────────────────
+		const toolModelSection = this.createCollapsible(containerEl, '🛠️ Tool Models');
+
+		// Also we will add "Preset: name" to the modelsRecord to let user pick presets as models for tools
+		let toolModelsRecord = { ...modelsRecord };
+		this.plugin.settings.modelPresets.forEach(preset => {
+			toolModelsRecord[`preset::${preset.id}`] = `[Preset] ${preset.name}`;
+		});
+
+		new Setting(toolModelSection)
+			.setName("Analyze Vault Model")
+			.setDesc("Model to use for the Analyze Vault tool.")
+			.addDropdown(dropdown => {
+				dropdown.addOptions(toolModelsRecord)
+					.setValue(this.plugin.settings.toolAnalyzeVaultModel)
+					.onChange(async (value) => {
+						this.plugin.settings.toolAnalyzeVaultModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(toolModelSection)
+			.setName("Summarize Note Model")
+			.setDesc("Model to use for the Summarize Note tool.")
+			.addDropdown(dropdown => {
+				dropdown.addOptions(toolModelsRecord)
+					.setValue(this.plugin.settings.toolSummarizeNoteModel)
+					.onChange(async (value) => {
+						this.plugin.settings.toolSummarizeNoteModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(toolModelSection)
+			.setName("AI Suggestions Model")
+			.setDesc("Model to use for the AI Suggestions tool.")
+			.addDropdown(dropdown => {
+				dropdown.addOptions(toolModelsRecord)
+					.setValue(this.plugin.settings.toolAISuggestionsModel)
+					.onChange(async (value) => {
+						this.plugin.settings.toolAISuggestionsModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(toolModelSection)
+			.setName("Help with Prompt Model")
+			.setDesc("Model to use for the Help with Prompt tool.")
+			.addDropdown(dropdown => {
+				dropdown.addOptions(toolModelsRecord)
+					.setValue(this.plugin.settings.toolHelpPromptModel)
+					.onChange(async (value) => {
+						this.plugin.settings.toolHelpPromptModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(toolModelSection)
+			.setName("Templates Model")
+			.setDesc("Model to use for the Templates tool.")
+			.addDropdown(dropdown => {
+				dropdown.addOptions(toolModelsRecord)
+					.setValue(this.plugin.settings.toolTemplatesModel)
+					.onChange(async (value) => {
+						this.plugin.settings.toolTemplatesModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
 		// ── Editor Commands (collapsible) ───────────────────
 		const cmdSection = this.createCollapsible(containerEl, '⌨️ Editor Commands');
 
@@ -508,6 +657,107 @@ export class AgentSettingTab extends PluginSettingTab {
 					return text;
 				});
 			promptSetting.settingEl.setCssStyles({ flexDirection: 'column', alignItems: 'stretch' });
+		});
+
+		// ── Model Presets (collapsible) ─────────────────────
+		const presetSection = this.createCollapsible(containerEl, '📋 Model Presets');
+
+		new Setting(presetSection)
+			.setDesc("Define reusable model configurations with specific context windows and GPU settings.")
+			.addButton((button) => {
+				button.setButtonText("Add preset").onClick(async () => {
+					this.plugin.settings.modelPresets.push({ 
+						id: `preset-${Date.now()}`, 
+						name: "New Preset", 
+						model: "", 
+						temperature: 0.7, 
+						contextWindow: 8192, 
+						gpuLayers: -1 
+					});
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+
+		this.plugin.settings.modelPresets.forEach((preset, index) => {
+			const div = presetSection.createDiv();
+			div.setCssStyles({
+				border: "1px solid var(--background-modifier-border)",
+				padding: "10px",
+				marginBottom: "10px",
+				borderRadius: "5px"
+			});
+
+			new Setting(div)
+				.setName("Preset name")
+				.addText(text => text
+					.setValue(preset.name)
+					.onChange(async (value) => {
+						preset.name = value;
+						await this.plugin.saveSettings();
+					})
+				)
+				.addButton(button => button
+					.setIcon("trash")
+					.setTooltip("Remove preset")
+					.onClick(async () => {
+						this.plugin.settings.modelPresets.splice(index, 1);
+						await this.plugin.saveSettings();
+						this.display();
+					})
+				);
+
+			new Setting(div)
+				.setName("Model ID / Name")
+				.addText(text => text
+					.setPlaceholder("e.g. qwen3-coder-next")
+					.setValue(preset.model)
+					.onChange(async (value) => {
+						preset.model = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			new Setting(div)
+				.setName("Temperature")
+				.addSlider(slider => slider
+					.setLimits(0, 2, 0.1)
+					.setValue(preset.temperature)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						preset.temperature = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			new Setting(div)
+				.setName("Context window")
+				.addText(text => text
+					.setPlaceholder("8192")
+					.setValue(String(preset.contextWindow))
+					.onChange(async (value) => {
+						const num = parseInt(value);
+						if (!isNaN(num)) {
+							preset.contextWindow = num;
+							await this.plugin.saveSettings();
+						}
+					})
+				);
+
+			new Setting(div)
+				.setName("GPU layers")
+				.setDesc("-1 for max offload")
+				.addText(text => text
+					.setPlaceholder("-1")
+					.setValue(String(preset.gpuLayers))
+					.onChange(async (value) => {
+						const num = parseInt(value);
+						if (!isNaN(num)) {
+							preset.gpuLayers = num;
+							await this.plugin.saveSettings();
+						}
+					})
+				);
 		});
 
 		// ── System Prompts (collapsible) ────────────────────

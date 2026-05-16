@@ -13,6 +13,11 @@ async function getBase64Image(app: any, file: TFile): Promise<string> {
 }
 
 export async function processCanvasNode(plugin: ObsidianAgentPlugin, canvas: any, node: any, tag?: string) {
+    if (plugin.settings.closeChatOnBoardroom && (tag?.includes('boardroom') || node.text?.includes('#boardroom'))) {
+        await plugin.closeChatView();
+        new Notice('📉 Closing chat to free VRAM for Boardroom deliberation...');
+    }
+
     new Notice(`Routing request to Cognitive OS${tag ? ` (${tag})` : ''}...`);
     let promptText = "";
     let imageBase64: string | undefined = undefined;
@@ -57,7 +62,10 @@ export async function processCanvasNode(plugin: ObsidianAgentPlugin, canvas: any
     }
 
     try {
-        const payload: any = { prompt: promptText };
+        const payload: any = { 
+            prompt: promptText,
+            compass_weight: plugin.settings.globalCompassWeight
+        };
         if (imageBase64) {
             payload.image_base64 = imageBase64;
         }

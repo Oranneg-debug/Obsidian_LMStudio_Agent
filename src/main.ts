@@ -133,6 +133,14 @@ export default class ObsidianAgentPlugin extends Plugin {
 		}
 	}
 
+	async closeChatView() {
+		const { workspace } = this.app;
+		const leaf = workspace.getLeavesOfType(CHAT_VIEW_TYPE)[0];
+		if (leaf) {
+			leaf.detach();
+		}
+	}
+
 	onunload() {
 	}
 

@@ -1,6 +1,7 @@
 import { ItemView, WorkspaceLeaf, Notice, TFile, MarkdownView, MarkdownRenderer, Component, Menu, requestUrl } from 'obsidian';
 import ObsidianAgentPlugin from './main';
 import { waitForAI, IAIToolDefinition, IAIProvidersService, IAIProvider, IChatMessage } from '@obsidian-ai-providers/sdk';
+import { AgentModelPreset } from './settings';
 
 export const CHAT_VIEW_TYPE = 'agent-chat-view';
 
@@ -43,6 +44,8 @@ export class ChatView extends ItemView {
 	activeAbortController: AbortController | null = null;
 	modelSelectorEl: HTMLSelectElement;
 	useMemoryCheckbox: HTMLInputElement;
+	useInternetCheckbox: HTMLInputElement;
+	contextCollapsed: boolean = true;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsidianAgentPlugin) {
 		super(leaf);
@@ -61,7 +64,49 @@ export class ChatView extends ItemView {
 		return 'bot';
 	}
 
-	getProviderAndModel(aiProviders: IAIProvidersService, settingValue: string): { provider?: IAIProvider, model?: string } {
+	async updateModelSelectorOptions() {
+		if (!this.modelSelectorEl) return;
+		this.modelSelectorEl.empty();
+		
+		const aiResolver = await waitForAI();
+		const aiProviders = await aiResolver.promise;
+
+		// 1. Add Presets
+		if (this.plugin.settings.modelPresets && this.plugin.settings.modelPresets.length > 0) {
+			const group = this.modelSelectorEl.createEl('optgroup', { attr: { label: '📋 Optimized Presets' } });
+			for (const p of this.plugin.settings.modelPresets) {
+				group.createEl('option', { text: p.name, value: `preset::${p.id}` });
+			}
+		}
+
+		// 2. Add raw models
+		const groupRaw = this.modelSelectorEl.createEl('optgroup', { attr: { label: '🤖 Raw Models' } });
+		groupRaw.createEl('option', { text: 'Default (First Available)', value: '' });
+
+		if (aiProviders.providers) {
+			for (const provider of aiProviders.providers) {
+				if (provider.availableModels && provider.availableModels.length > 0) {
+					for (const model of provider.availableModels) {
+						groupRaw.createEl('option', { text: `${provider.name} - ${model}`, value: `${provider.id}::${model}` });
+					}
+				} else {
+					groupRaw.createEl('option', { text: `${provider.name} - ${provider.model || 'Default'}`, value: `${provider.id}::${provider.model || 'default'}` });
+				}
+			}
+		}
+	}
+
+	getProviderAndModel(aiProviders: IAIProvidersService, settingValue: string): { provider?: IAIProvider, model?: string, preset?: AgentModelPreset } {
+		if (settingValue.startsWith('preset::')) {
+			const presetId = settingValue.replace('preset::', '');
+			const preset = this.plugin.settings.modelPresets.find(p => p.id === presetId);
+			if (preset) {
+				// Search for a provider that matches the preset's model or just use the first one if it's a generic ID
+				const provider = aiProviders.providers.find(p => p.availableModels?.includes(preset.model) || p.model === preset.model) || aiProviders.providers[0];
+				return { provider, model: preset.model, preset };
+			}
+		}
+		
 		if (!settingValue) return { provider: aiProviders.providers[0], model: undefined };
 		
 		const parts = settingValue.split("::");
@@ -165,6 +210,14 @@ export class ChatView extends ItemView {
 			void this.saveChatHistory();
 		});
 
+		const clearContextBtn = btnGroup.createEl('button', { text: '🗑️ Clear Context' });
+		clearContextBtn.setCssStyles({ fontSize: '0.8em', padding: '2px 8px', height: 'auto', color: 'var(--text-error)' });
+		clearContextBtn.addEventListener('click', () => {
+			this.activeContextFiles = [];
+			this.renderActiveContextRibbon();
+			new Notice("Chat context cleared.");
+		});
+
 		this.scrollContainer = container.createDiv('agent-scroll-container');
 		this.scrollContainer.setCssStyles({
 			flex: '1',
@@ -236,6 +289,7 @@ export class ChatView extends ItemView {
 
 		this.useRagCheckbox = mkToggle(toggleRow, 'Semantic search', true);
 		this.useMemoryCheckbox = mkToggle(toggleRow, 'Agent memory', true);
+		this.useInternetCheckbox = mkToggle(toggleRow, 'Internet', this.plugin.settings.internetAccess);
 		this.overridePromptCheckbox = mkToggle(toggleRow, 'Override prompt', false);
 
 		this.overridePromptTextarea = inputWrapper.createEl('textarea', { cls: 'agent-chat-input' });
@@ -329,7 +383,10 @@ export class ChatView extends ItemView {
 		analyzeBtn.addEventListener('click', () => void this.toolAnalyzeVault(analyzeBtn));
 		mkTool('📝', 'Summarize Note', () => {
 			const f = this.findActiveNoteFile();
-			if (f) { this.inputEl.value = `Summarize [[${f.path}]]`; this.inputEl.focus(); }
+			if (f) { 
+				this.inputEl.value = `Summarize [[${f.path}]]`; 
+				void this.sendMessage(undefined, this.plugin.settings.toolSummarizeNoteModel);
+			}
 			else new Notice("Open a note first.");
 		});
 		mkTool('🎲', 'AI Suggestions', () => void this.toolGenerateAISuggestions());
@@ -337,7 +394,7 @@ export class ChatView extends ItemView {
 			const f = this.findActiveNoteFile();
 			const meta = this.plugin.settings.metaPromptTemplate || "You are an expert prompt engineer. Help me write a prompt about:";
 			this.inputEl.value = meta + (f ? ` [[${f.path}]]` : '') + '\n\n';
-			this.inputEl.focus();
+			void this.sendMessage(undefined, this.plugin.settings.toolHelpPromptModel);
 		});
 
 		// ── Chat box ──
@@ -398,7 +455,7 @@ export class ChatView extends ItemView {
 			backgroundColor: 'transparent', border: 'none', boxShadow: 'none',
 			color: 'var(--text-muted)', fontSize: '0.7em', maxWidth: '130px', cursor: 'pointer'
 		});
-		void this.populateModelSelector();
+		void this.updateModelSelectorOptions();
 
 		const rightControls = bottomRow.createDiv();
 		rightControls.setCssStyles({ display: 'flex', gap: '5px', alignItems: 'center' });
@@ -518,39 +575,44 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	async populateModelSelector() {
-		try {
-			const aiResolver = await waitForAI();
-			const aiProviders = await aiResolver.promise;
-			this.modelSelectorEl.empty();
-
-			const defaultOpt = this.modelSelectorEl.createEl('option', { text: 'Default Model', value: '' });
-			defaultOpt.value = '';
-
-			if (aiProviders.providers) {
-				for (const provider of aiProviders.providers) {
-					if (provider.availableModels && provider.availableModels.length > 0) {
-						for (const model of provider.availableModels) {
-							// Skip embedding-only models
-							const caps = provider.modelCapabilities?.[model];
-							if (caps && caps.embedding && !caps.text) continue;
-
-							const opt = this.modelSelectorEl.createEl('option', { text: `${model}` });
-							opt.value = `${provider.id}::${model}`;
-							if (opt.value === this.plugin.settings.chatModel) opt.selected = true;
-						}
-					} else {
-						const opt = this.modelSelectorEl.createEl('option', { text: `${provider.name}` });
-						opt.value = `${provider.id}::${provider.model || 'default'}`;
-						if (opt.value === this.plugin.settings.chatModel) opt.selected = true;
-					}
-				}
-			}
-		} catch { /* providers not ready yet */ }
-	}
 
 	renderActiveContextRibbon() {
 		this.activeContextContainer.empty();
+		
+		if (this.activeContextFiles.length === 0) return;
+
+		const count = this.activeContextFiles.length;
+		const ribbonActions = this.activeContextContainer.createDiv();
+		ribbonActions.setCssStyles({ display: 'flex', gap: '5px', marginBottom: '5px', width: '100%', flexWrap: 'wrap' });
+
+		const collapseBtn = ribbonActions.createDiv();
+		collapseBtn.setCssStyles({
+			cursor: 'pointer', backgroundColor: 'var(--background-modifier-border)',
+			padding: '2px 8px', borderRadius: '10px', fontSize: '0.7em',
+			color: 'var(--text-muted)'
+		});
+		collapseBtn.setText(this.contextCollapsed ? `📦 Show Context (${count})` : '📂 Hide Context');
+		collapseBtn.onclick = () => {
+			this.contextCollapsed = !this.contextCollapsed;
+			this.renderActiveContextRibbon();
+		};
+
+		if (count > 1) {
+			const clearBtn = ribbonActions.createDiv();
+			clearBtn.setCssStyles({
+				cursor: 'pointer', backgroundColor: 'var(--background-modifier-border)',
+				padding: '2px 8px', borderRadius: '10px', fontSize: '0.7em',
+				color: 'var(--text-error)'
+			});
+			clearBtn.setText('🗑️ Clear All');
+			clearBtn.onclick = () => {
+				this.activeContextFiles = [];
+				this.renderActiveContextRibbon();
+			};
+		}
+
+		if (this.contextCollapsed) return;
+
 		this.activeContextFiles.forEach((ctx, idx) => {
 			const item = this.activeContextContainer.createDiv();
 			item.setCssStyles({
@@ -587,11 +649,15 @@ export class ChatView extends ItemView {
 	}
 
 	async handleFileOpen(file: TFile | null) {
+		// Hook: When switching notes, we clear old context and optionally add the new one
+		// This prevents "context leak" between unrelated notes
+		this.activeContextFiles = [];
+		
 		if (file && file instanceof TFile && file.path.endsWith('.md')) {
-			if (!this.activeContextFiles.some(c => c.file.path === file.path)) {
+			if (this.plugin.settings.autoAddContext) {
 				this.activeContextFiles.push({ file, weight: 1 });
-				this.renderActiveContextRibbon();
 			}
+			this.renderActiveContextRibbon();
 		}
 
 		if (!file || !(file instanceof TFile) || !file.path.endsWith('.md')) {
@@ -1285,8 +1351,8 @@ export class ChatView extends ItemView {
 							// eslint-disable-next-line @typescript-eslint/no-explicit-any
 							const aiRes = await waitForAI();
 							const aiP = await aiRes.promise as any;
-							const selModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
-							const { provider: p, model: m } = this.getProviderAndModel(aiP, selModel);
+							const selModel = this.plugin.settings.toolTemplatesModel || this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+							const { provider: p, model: m, preset } = this.getProviderAndModel(aiP, selModel);
 							if (p) {
 								const currentContent = await this.plugin.app.vault.cachedRead(activeFile);
 								const sysPrompt = `You are a note formatter. You will receive a note that has a template structure and existing content. Reorganize the existing content to fit the template's sections and headings. Keep ALL existing information — do not remove anything. Fill template sections with relevant existing content. If a template section has no matching content, leave it with a placeholder comment like "<!-- TODO -->". Preserve the YAML frontmatter exactly as-is. Output ONLY the restructured note, nothing else.`;
@@ -1298,6 +1364,12 @@ export class ChatView extends ItemView {
 										{ role: 'user', content: `Here is the note to restructure:\n\n${currentContent}` }
 									],
 									provider: p, model: m,
+									temperature: preset ? preset.temperature : undefined,
+									// eslint-disable-next-line @typescript-eslint/no-explicit-any
+									...((preset && p.id === 'lm-studio') ? { 
+										context_window: preset.contextWindow,
+										gpu_offload: preset.gpuLayers
+									} as any : {}),
 									abortController: new AbortController()
 								});
 
@@ -1510,8 +1582,8 @@ ${sampleTexts.map((s, i) => `--- Sample ${i + 1} ---\n${s}`).join('\n\n')}
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const aiResolver = await waitForAI();
 			const aiProviders = await aiResolver.promise as any;
-			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
-			const { provider, model } = this.getProviderAndModel(aiProviders, selectedModel);
+			const selectedModel = this.plugin.settings.toolAnalyzeVaultModel || this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider, model, preset } = this.getProviderAndModel(aiProviders, selectedModel);
 			if (!provider) { new Notice("No model configured."); return; }
 
 			const sysPrompt = `You are a knowledge management analyst. Analyze this Obsidian vault and produce a comprehensive vault profile in markdown format. Include these sections:
@@ -1543,6 +1615,12 @@ Be specific, reference actual note names and tags from the data.`;
 					{ role: 'user', content: stats }
 				],
 				provider, model,
+				temperature: preset ? preset.temperature : undefined,
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				...((preset && provider.id === 'lm-studio') ? { 
+					context_window: preset.contextWindow,
+					gpu_offload: preset.gpuLayers
+				} as any : {}),
 				abortController: new AbortController()
 			});
 
@@ -1597,8 +1675,8 @@ Be specific, reference actual note names and tags from the data.`;
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const aiResolver = await waitForAI();
 			const aiProviders = await aiResolver.promise as any;
-			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
-			const { provider, model } = this.getProviderAndModel(aiProviders, selectedModel);
+			const selectedModel = this.plugin.settings.toolAISuggestionsModel || this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider, model, preset } = this.getProviderAndModel(aiProviders, selectedModel);
 			if (!provider) { new Notice("No model configured."); return; }
 
 			const sysPrompt = "You are a helpful assistant. Provide exactly 3 short, distinct, and creative suggested questions or actions the user could take based on the provided note. Output a valid JSON array of 3 strings. Only output the JSON array, nothing else.";
@@ -1610,6 +1688,12 @@ Be specific, reference actual note names and tags from the data.`;
 					{ role: 'user', content: content.substring(0, 1500) }
 				],
 				provider, model,
+				temperature: preset ? preset.temperature : undefined,
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				...((preset && provider.id === 'lm-studio') ? { 
+					context_window: preset.contextWindow,
+					gpu_offload: preset.gpuLayers
+				} as any : {}),
 				abortController: new AbortController()
 			});
 
@@ -1751,7 +1835,7 @@ Be specific, reference actual note names and tags from the data.`;
 		}
 	}
 
-	async sendMessage(stopBtn?: HTMLElement) {
+	async sendMessage(stopBtn?: HTMLElement, overrideModelSetting?: string) {
 		const text = this.inputEl.value.trim();
 		if (!text && this.pendingAttachments.length === 0) return;
 
@@ -1860,8 +1944,8 @@ Be specific, reference actual note names and tags from the data.`;
 				return;
 			}
 			
-			const selectedModel = this.modelSelectorEl?.value || this.plugin.settings.chatModel;
-			const { provider: chatProvider, model: chatModel } = this.getProviderAndModel(aiProviders, selectedModel);
+			const selectedModelValue = overrideModelSetting || this.modelSelectorEl?.value || this.plugin.settings.chatModel;
+			const { provider: chatProvider, model: chatModel, preset } = this.getProviderAndModel(aiProviders, selectedModelValue);
 			if (!chatProvider) return;
 
 			let tools: IAIToolDefinition[] | undefined = [
@@ -1989,7 +2073,7 @@ Be specific, reference actual note names and tags from the data.`;
 				);
 			}
 
-			if (this.plugin.settings.enableWebScraping) {
+			if (this.plugin.settings.enableWebScraping && this.useInternetCheckbox.checked) {
 				tools.push(
 					{
 						type: "function",
@@ -2022,7 +2106,7 @@ Be specific, reference actual note names and tags from the data.`;
 				);
 			}
 
-			if (this.plugin.settings.enableWebScraping) {
+			if (this.plugin.settings.enableWebScraping && this.useInternetCheckbox.checked) {
 				tools.push({
 					type: "function",
 					function: {
@@ -2092,6 +2176,12 @@ Be specific, reference actual note names and tags from the data.`;
 					messages: currentHistory,
 					tools: tools,
 					tool_choice: "auto",
+					temperature: preset ? preset.temperature : undefined,
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					...((preset && chatProvider.id === 'lm-studio') ? { 
+						context_window: preset.contextWindow,
+						gpu_offload: preset.gpuLayers
+					} as any : {}),
 					abortController: this.activeAbortController || undefined,
 					onProgress: (chunk: string, accumulated: string) => {
 						if (loadingEl.parentElement) loadingEl.remove();

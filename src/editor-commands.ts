@@ -107,12 +107,20 @@ export function registerEditorCommands(plugin: ObsidianAgentPlugin) {
 	});
 
 	const sendToCogOS = async (selection: string, prefix: string, sourceFile: any) => {
+		if (plugin.settings.closeChatOnBoardroom && (prefix.includes('boardroom') || selection.includes('#boardroom'))) {
+			await plugin.closeChatView();
+			new Notice('📉 Closing chat to free VRAM for Boardroom deliberation...');
+		}
+
 		new Notice('🧠 Sending to Cognitive OS... Check your vault in a few minutes!');
 		try {
 			const res = await fetch(plugin.settings.cognitiveOSUrl || 'http://127.0.0.1:5000/process', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ prompt: prefix + selection })
+				body: JSON.stringify({ 
+					prompt: prefix + selection,
+					compass_weight: plugin.settings.globalCompassWeight
+				})
 			});
 			const data = await res.json();
 			
